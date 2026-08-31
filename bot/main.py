@@ -24,6 +24,31 @@ intents.presences = True
 intents.guilds = True
 intents.message_content = True
 
+SETUP_PANELS = [
+    "aufstellung",
+    "dienst",
+    "aktivitaet",
+    "katalog",
+    "sanktionen",
+    "blacklist",
+    "rang",
+    "memberliste",
+    "mitarbeiter",
+    "pflicht",
+    "lager",
+    "lootdrop",
+    "abgaben",
+    "kasse",
+    "routen",
+    "einkauf",
+    "routecheck",
+    "arbeiter",
+    "urlaub",
+    "rollenanfrage",
+    "clipantrag",
+    "tickets",
+]
+
 PANEL_NAMES = [
     "mitarbeiter",
     "memberliste",
@@ -80,7 +105,10 @@ class ClubBot(commands.Bot):
         self.add_view(views.AbmeldungView(self))
         self.add_view(views.AbgabeView(self))
         self.add_view(views.KasseView(self))
-        await self.tree.sync()
+        try:
+            await self.tree.sync()
+        except Exception as exc:
+            print("Command-Sync:", exc)
 
     async def log(self, guild: discord.Guild, text: str):
         raw = await database.get_setting(self.db, f"log_channel:{guild.id}")
@@ -282,7 +310,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 @bot.tree.command(name="setup", description="Eine Live-Liste in diesen Kanal setzen")
 @app_commands.describe(panel="Welche Liste soll hier stehen?")
-@app_commands.choices(panel=[app_commands.Choice(name=n, value=n) for n in PANEL_NAMES])
+@app_commands.choices(panel=[app_commands.Choice(name=n, value=n) for n in SETUP_PANELS])
 async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice[str]):
     if not is_leader(interaction.user):
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
@@ -566,7 +594,7 @@ async def start_web():
     import uvicorn
 
     app = make_app(bot)
-    port = int(os.getenv("WEB_PORT", "8080"))
+    port = int(os.getenv("PORT") or os.getenv("WEB_PORT") or "8080")
     config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
