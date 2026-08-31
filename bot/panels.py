@@ -64,10 +64,23 @@ async def embed_mitarbeiter(guild):
 
 
 async def embed_memberliste(guild):
-    return await embed_rangsystem(guild)
+    return await embed_rangsystem_users(guild)
 
 
 async def embed_rangsystem(guild):
+    from rules_data import RANK_INFO
+    e = discord.Embed(title="Rangsystem", color=0x3B82C4)
+    parts = []
+    for name, desc in RANK_INFO:
+        parts.append(f"**{name}**")
+        parts.append(desc)
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_rangsystem_users(guild):
     names = rank_names(guild)
     grouped = {r: [] for r in names}
     for m in staff_members(guild):
