@@ -1,0 +1,376 @@
+from collections import defaultdict
+from datetime import datetime
+
+import discord
+
+from ranks import RANK_ROLE_NAMES, ROSTER_AREAS, display_line, highest_rank, is_staff
+
+
+def now_footer(extra=""):
+    stamp = datetime.now().strftime("%d.%m.%Y %H:%M Uhr")
+    text = f"Automatische Aktualisierung • {stamp}"
+    if extra:
+        text = f"Automatische Aktualisierung • {extra} • {stamp}"
+    return text
+
+
+def staff_members(guild):
+    people = []
+    for m in guild.members:
+        if m.bot:
+            continue
+        if highest_rank(m):
+            people.append(m)
+    return people
+
+
+async def embed_mitarbeiter(guild):
+    grouped = {r: [] for r in RANK_ROLE_NAMES}
+    for m in staff_members(guild):
+        rank = highest_rank(m)
+        if rank:
+            grouped[rank].append(m)
+
+    e = discord.Embed(title="Mitarbeiterliste", color=0x2B2D31)
+    lines = []
+    for rank in RANK_ROLE_NAMES:
+        members = sorted(grouped[rank], key=lambda x: (x.display_name.lower()))
+        lines.append(f"**{rank} ({len(members)})**")
+        if members:
+            lines.extend(display_line(m) for m in members)
+        else:
+            lines.append("_niemand_")
+        lines.append("")
+    e.description = "\n".join(lines).strip()
+    e.set_footer(text=now_footer("Discord-Rollen + Dienststatus"))
+    return e
+
+
+async def embed_memberliste(guild):
+    leaders, staff, members, bots = [], [], [], []
+    staff_ranks = set(RANK_ROLE_NAMES)
+    for m in guild.members:
+        names = {r.name for r in m.roles}
+        if m.bot:
+            bots.append(m)
+        elif names & {"Geschäftsleitung", "Clubleitung"}:
+            leaders.append(m)
+        elif names & staff_ranks:
+            staff.append(m)
+        else:
+            members.append(m)
+
+    def block(title, group):
+        group = sorted(group, key=lambda x: x.display_name.lower())
+        body = "\n".join(display_line(m) for m in group) if group else "_niemand_"
+        return f"**{title} ({len(group)})**\n{body}"
+
+    e = discord.Embed(title="Memberliste", color=0x2B2D31)
+    e.description = "\n\n".join(
+        [
+            block("Leitung", leaders),
+            block("Mitarbeiter", staff),
+            block("Mitglieder", members),
+            block("Bots", bots),
+        ]
+    )
+    e.set_footer(text=now_footer("neue Joins werden automatisch ergänzt"))
+    return e
+
+
+async def embed_rangsystem(guild):
+    rights = {
+        "Geschäftsleitung": "Alles • Befördern / Degradieren • Config • Website",
+        "Clubleitung": "Sanktionen • Urlaub • Aufstellung • Lager • Ausrüstung",
+        "Leitende Servicekraft": "Warnungen • Aufstellung • Aktivität • Ausrüstung prüfen",
+        "Servicekraft": "An-/Abmelden • Urlaub beantragen • Lager (wenn erlaubt)",
+        "Junior-Servicekraft": "An-/Abmelden • Urlaub beantragen",
+        "Auszubildende/r": "An-/Abmelden • Urlaub beantragen",
+    }
+    grouped = {r: [] for r in RANK_ROLE_NAMES}
+    for m in staff_members(guild):
+        rank = highest_rank(m)
+        if rank:
+            grouped[rank].append(m)
+
+    e = discord.Embed(title="Rangsystem", color=0x2B2D31)
+    parts = []
+    for rank in RANK_ROLE_NAMES:
+        people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
+        parts.append(f"**{rank} ({len(people)})**")
+        parts.append(f"_{rights.get(rank, '')}_")
+        if people:
+            parts.extend(display_line(m) for m in people)
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Ränge ändert nur die Leitung"))
+    return e
+
+
+async def embed_aufstellung(guild, db):
+    cur = await db.execute("SELECT user_id, area FROM roster")
+    rows = await cur.fetchall()
+    assigned = {r["user_id"]: r["area"] for r in rows}
+
+    buckets = {a: [] for a in ROSTER_AREAS}
+    for m in staff_members(guild):
+        area = assigned.get(m.id, "Nicht eingeteilt")
+        if area not in buckets:
+            area = "Nicht eingeteilt"
+        buckets[area].append(m)
+
+    e = discord.Embed(title="Aufstellung", color=0x2B2D31)
+    parts = []
+    for area in ROSTER_AREAS:
+        people = sorted(buckets[area], key=lambda x: x.display_name.lower())
+        parts.append(f"**{area} ({len(people)})**")
+        if people:
+            parts.extend(display_line(m) for m in people)
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Einteilung über die Buttons"))
+    return e
+
+
+async def embed_dienststatus(guild, db):
+    cur = await db.execute("SELECT user_id, status, reason FROM attendance")
+    rows = {r["user_id"]: r for r in await cur.fetchall()}
+
+    buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
+    for m in staff_members(guild):
+        row = rows.get(m.id)
+        status = row["status"] if row else "offen"
+        if status not in buckets:
+            status = "offen"
+        reason = row["reason"] if row else None
+        buckets[status].append((m, reason))
+
+    def block(title, key):
+        items = sorted(buckets[key], key=lambda x: x[0].display_name.lower())
+        lines = [f"**{title} ({len(items)})**"]
+        for m, reason in items:
+            extra = f"   Grund: {reason}" if reason and key == "abgemeldet" else ""
+            lines.append(display_line(m) + extra)
+        if len(items) == 0:
+            lines.append("_niemand_")
+        return "\n".join(lines)
+
+    e = discord.Embed(title="Dienststatus", color=0x2B2D31)
+    e.description = "\n\n".join(
+        [
+            block("Angemeldet", "angemeldet"),
+            block("Abgemeldet", "abgemeldet"),
+            block("Offen", "offen"),
+        ]
+    )
+    e.set_footer(text=now_footer("Buttons: Anmelden / Abmelden"))
+    return e
+
+
+async def embed_katalog(db):
+    cur = await db.execute("SELECT name, description FROM catalog ORDER BY id")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Sanktionskatalog", color=0x2B2D31)
+    parts = []
+    for r in rows:
+        parts.append(f"**{r['name']}**")
+        parts.append(r["description"])
+        parts.append("")
+    e.description = "\n".join(parts).strip() or "_noch leer_"
+    e.set_footer(text=now_footer("nur Leitung ändert den Katalog"))
+    return e
+
+
+async def embed_sanktionen(guild, db):
+    cur = await db.execute(
+        "SELECT user_id, reason, created_at FROM warnings ORDER BY id DESC LIMIT 15"
+    )
+    warns = await cur.fetchall()
+    warn_count = defaultdict(int)
+    cur = await db.execute("SELECT user_id, COUNT(*) AS c FROM warnings GROUP BY user_id")
+    for r in await cur.fetchall():
+        warn_count[r["user_id"]] = r["c"]
+
+    cur = await db.execute(
+        "SELECT user_id, kind, reason, until_text FROM sanctions WHERE active = 1 ORDER BY id DESC"
+    )
+    active = await cur.fetchall()
+
+    def name(uid):
+        m = guild.get_member(uid)
+        return display_line(m) if m else f"`{uid}`"
+
+    e = discord.Embed(title="Aktive Sanktionen", color=0x2B2D31)
+    parts = ["**Verwarnungen**"]
+    if warns:
+        seen = set()
+        for w in warns:
+            if w["user_id"] in seen:
+                continue
+            seen.add(w["user_id"])
+            parts.append(f"{name(w['user_id'])} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
+    else:
+        parts.append("_keine_")
+
+    parts.append("")
+    parts.append(f"**Laufende Sanktionen ({len(active)})**")
+    if active:
+        for s in active:
+            until = f" | bis {s['until_text']}" if s["until_text"] else ""
+            parts.append(f"{name(s['user_id'])} | {s['kind']}{until} | {s['reason']}")
+    else:
+        parts.append("_keine_")
+
+    e.description = "\n".join(parts)
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_ausruestung(guild, db):
+    cur = await db.execute("SELECT name FROM equipment_items ORDER BY id")
+    items = [r["name"] for r in await cur.fetchall()]
+    cur = await db.execute("SELECT user_id, status, missing FROM equipment")
+    status_map = {r["user_id"]: r for r in await cur.fetchall()}
+
+    buckets = {"vollständig": [], "unvollständig": [], "ungeprüft": []}
+    for m in staff_members(guild):
+        row = status_map.get(m.id)
+        st = row["status"] if row else "ungeprüft"
+        missing = row["missing"] if row else None
+        buckets.setdefault(st, buckets["ungeprüft"])
+        if st not in buckets:
+            st = "ungeprüft"
+        buckets[st].append((m, missing))
+
+    e = discord.Embed(title="Pflichtausrüstung", color=0x2B2D31)
+    soll = "\n".join(f"• {i}" for i in items) or "_nicht festgelegt_"
+    parts = [f"**Soll-Ausrüstung**\n{soll}", ""]
+    for title, key in (
+        ("Vollständig", "vollständig"),
+        ("Unvollständig", "unvollständig"),
+        ("Nicht geprüft", "ungeprüft"),
+    ):
+        group = sorted(buckets[key], key=lambda x: x[0].display_name.lower())
+        parts.append(f"**{title} ({len(group)})**")
+        if group:
+            for m, missing in group:
+                extra = f" | fehlt: {missing}" if missing and key == "unvollständig" else ""
+                parts.append(display_line(m) + extra)
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Prüfung durch Leitung / Clubleitung"))
+    return e
+
+
+async def embed_lager(db):
+    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY category, item")
+    rows = await cur.fetchall()
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[r["category"]].append(r)
+
+    clean = []
+    for cat, items in grouped.items():
+        clean.append(f"**{cat}**")
+        for r in items:
+            clean.append(f"{r['item']}  —  **{r['qty']}**")
+        clean.append("")
+
+    cur = await db.execute(
+        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 3"
+    )
+    logs = await cur.fetchall()
+    clean.append("**Letzte Bewegung**")
+    if logs:
+        for lg in logs:
+            sign = "+" if lg["delta"] > 0 else ""
+            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
+    else:
+        clean.append("_noch keine_")
+
+    e = discord.Embed(title="Lager", color=0x2B2D31)
+    e.description = "\n".join(clean).strip()
+    e.set_footer(text=now_footer("Bestand ändert sich bei jedem Klick"))
+    return e
+
+
+async def embed_urlaub(guild, db):
+    cur = await db.execute(
+        "SELECT user_id, start, end, reason, status FROM vacations ORDER BY id DESC LIMIT 30"
+    )
+    rows = await cur.fetchall()
+    buckets = defaultdict(list)
+    for r in rows:
+        buckets[r["status"]].append(r)
+
+    def name(uid):
+        m = guild.get_member(uid)
+        return display_line(m) if m else f"`{uid}`"
+
+    e = discord.Embed(title="Urlaub", color=0x2B2D31)
+    parts = []
+    for title, key in (
+        ("Beantragt", "beantragt"),
+        ("Genehmigt / Aktiv", "genehmigt"),
+        ("Abgelehnt", "abgelehnt"),
+    ):
+        items = buckets.get(key, [])
+        parts.append(f"**{title} ({len(items)})**")
+        if items:
+            for r in items:
+                parts.append(f"{name(r['user_id'])} | {r['start']} – {r['end']} | {r['reason']}")
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_infos(db):
+    cur = await db.execute("SELECT title, body, updated_at FROM infos ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Infos (Website)", color=0x2B2D31)
+    parts = []
+    for r in rows:
+        parts.append(f"**{r['title']}**")
+        parts.append(r["body"])
+        parts.append(f"_aktualisiert {r['updated_at']}_")
+        parts.append("")
+    e.description = "\n".join(parts).strip() or "_noch keine Infos auf der Website_"
+    e.set_footer(text=now_footer("eintragen über die Website"))
+    return e
+
+
+async def embed_arbeiter(guild, db):
+    cur = await db.execute("SELECT user_id, display_name, phone, verified, note FROM workers")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Arbeiter", color=0x2B2D31)
+    if not rows:
+        e.description = "_keine Einträge_"
+    else:
+        parts = []
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            label = display_line(m) if m else (r["display_name"] or str(r["user_id"]))
+            ver = "geprüft" if r["verified"] else "offen"
+            phone = r["phone"] or "—"
+            note = f" | {r['note']}" if r["note"] else ""
+            parts.append(f"{label} | Tel: {phone} | {ver}{note}")
+        e.description = "\n".join(parts)
+    e.set_footer(text=now_footer("keine Ausweis-Fotos gespeichert"))
+    return e
+
+
+async def embed_tickets():
+    e = discord.Embed(title="Ophelia Manager • Tickets", color=0x3B82C4)
+    e.description = (
+        "Klick auf **Ticket öffnen** → es wird ein öffentlicher Kanal erstellt.\n"
+        "Klick auf **Clip-Kanal** → öffentlicher Kanal für Clips, den jeder sehen kann."
+    )
+    e.set_footer(text=now_footer("Kanäle kann die Leitung später löschen"))
+    return e
