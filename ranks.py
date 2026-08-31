@@ -1,582 +1,540 @@
-import asyncio
-import os
-import sys
-from pathlib import Path
+from collections import defaultdict
+from datetime import datetime
 
 import discord
-from discord import app_commands
-from discord.ext import commands
-from dotenv import load_dotenv
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-load_dotenv(ROOT / ".env")
-
-import database
-import panels
-import views
-from ranks import is_leader, is_officer, rank_names, set_areas, set_guild_roles
+from ranks import ROSTER_AREAS, display_line, hidden_from_lists, highest_rank, rank_names
 
 
-intents = discord.Intents.default()
-intents.members = True
-intents.presences = True
-intents.guilds = True
-intents.message_content = True
-
-PANEL_NAMES = [
-    "mitarbeiter",
-    "memberliste",
-    "rang",
-    "aufstellung",
-    "dienst",
-    "katalog",
-    "sanktionen",
-    "ausruestung",
-    "lager",
-    "urlaub",
-    "infos",
-    "arbeiter",
-    "tickets",
-    "regeln",
-    "status",
-    "aktivitaet",
-    "notizen",
-    "blacklist",
-    "pflicht",
-    "routen",
-    "einkauf",
-    "routecheck",
-    "lootdrop",
-    "rollenanfrage",
-    "clipantrag",
-    "abgaben",
-    "kasse",
-]
+def now_footer(extra=""):
+    stamp = datetime.now().strftime("%d.%m.%Y %H:%M Uhr")
+    text = f"Automatische Aktualisierung • {stamp}"
+    if extra:
+        text = f"Automatische Aktualisierung • {extra} • {stamp}"
+    return text
 
 
-class ClubBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
-        self.db = None
+def visible_members(guild):
+    people = []
+    for m in guild.members:
+        if m.bot:
+            continue
+        if hidden_from_lists(m):
+            continue
+        people.append(m)
+    return people
 
-    async def setup_hook(self):
-        self.db = await database.connect()
-        self.add_view(views.DienstView(self))
-        self.add_view(views.AufstellungView(self))
-        self.add_view(views.LagerView(self))
-        self.add_view(views.SanktionView(self))
-        self.add_view(views.AusruestungView(self))
-        self.add_view(views.UrlaubView(self))
-        self.add_view(views.RangView(self))
-        self.add_view(views.TicketView(self))
-        self.add_view(views.AktivitaetView(self))
-        self.add_view(views.StatusView(self))
-        self.add_view(views.BlacklistView(self))
-        self.add_view(views.RolleAnfrageView(self))
-        self.add_view(views.ClipAntragView(self))
-        self.add_view(views.LootView(self))
-        self.add_view(views.RouteCheckView(self))
-        self.add_view(views.AbmeldungView(self))
-        self.add_view(views.AbgabeView(self))
-        self.add_view(views.KasseView(self))
-        await self.tree.sync()
 
-    async def log(self, guild: discord.Guild, text: str):
-        raw = await database.get_setting(self.db, f"log_channel:{guild.id}")
-        if not raw:
-            return
-        ch = guild.get_channel(int(raw))
-        if ch:
-            try:
-                await ch.send(text)
-            except discord.HTTPException:
-                pass
+def staff_members(guild):
+    return [m for m in visible_members(guild) if highest_rank(m)]
 
-    async def refresh_panels(self, guild: discord.Guild, names=None):
-        mapping = {
-            "mitarbeiter": ("mitarbeiter", panels.embed_mitarbeiter(guild), None),
-            "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
-            "rang": ("rang", panels.embed_rangsystem(guild), views.RangView(self)),
-            "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": ("dienst", panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
-            "katalog": ("katalog", panels.embed_katalog(self.db), None),
-            "sanktionen": ("sanktionen", panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
-            "ausruestung": ("ausruestung", panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
-            "lager": ("lager", panels.embed_lager(self.db), views.LagerView(self)),
-            "urlaub": ("urlaub", panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
-            "infos": ("infos", panels.embed_infos(self.db), None),
-            "arbeiter": ("arbeiter", panels.embed_arbeiter(guild, self.db), None),
-            "tickets": ("tickets", panels.embed_tickets(), views.TicketView(self)),
-            "regeln": ("regeln", panels.embed_regeln(self.db), None),
-            "status": ("status", panels.embed_status(self.db), views.StatusView(self)),
-            "aktivitaet": ("aktivitaet", panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
-            "notizen": ("notizen", panels.embed_notizen(self.db), None),
-            "blacklist": ("blacklist", panels.embed_blacklist(self.db), views.BlacklistView(self)),
-            "pflicht": ("pflicht", panels.embed_pflicht(), None),
-            "routen": ("routen", panels.embed_routes(self.db), None),
-            "einkauf": ("einkauf", panels.embed_einkauf(self.db), None),
-            "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
-            "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
-            "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
-            "abgaben": ("abgaben", panels.embed_abgaben(self.db), views.AbgabeView(self)),
-            "kasse": ("kasse", panels.embed_kasse(self.db), views.KasseView(self)),
-        }
-        targets = names or list(mapping.keys())
-        for name in targets:
-            key, embed_coro, view = mapping[name]
-            row = await database.get_panel(self.db, f"{guild.id}:{key}")
-            if not row:
+
+def ping_ophelia(guild):
+    for r in guild.roles:
+        if r.name.lower() in {"ophelia", "ophelia familie", "@ophelia"}:
+            return r.mention
+    return "@Ophelia"
+
+
+async def embed_mitarbeiter(guild):
+    names = rank_names(guild)
+    grouped = {r: [] for r in names}
+    for m in staff_members(guild):
+        rank = highest_rank(m)
+        if rank:
+            grouped[rank].append(m)
+
+    e = discord.Embed(title="Mitarbeiterliste", color=0x2B2D31)
+    lines = []
+    if not names:
+        e.description = "Noch keine Rang-Rollen gesetzt.\nLeitung: `/rangrollen` mit euren echten Rollen."
+        e.set_footer(text=now_footer())
+        return e
+    for rank in names:
+        members = sorted(grouped[rank], key=lambda x: (x.display_name.lower()))
+        lines.append(f"**{rank} ({len(members)})**")
+        if members:
+            lines.extend(display_line(m) for m in members)
+        else:
+            lines.append("_niemand_")
+        lines.append("")
+    e.description = "\n".join(lines).strip()
+    e.set_footer(text=now_footer("Discord-Rollen + Dienststatus"))
+    return e
+
+
+async def embed_memberliste(guild):
+    return await embed_rangsystem(guild)
+
+
+async def embed_rangsystem(guild):
+    names = rank_names(guild)
+    grouped = {r: [] for r in names}
+    for m in staff_members(guild):
+        rank = highest_rank(m)
+        if rank:
+            grouped[rank].append(m)
+
+    e = discord.Embed(title="Rangsystem", color=0x2B2D31)
+    if not names:
+        e.description = "Noch keine Rang-Rollen gesetzt. `/rangrollen` benutzen."
+        e.set_footer(text=now_footer())
+        return e
+    parts = []
+    for i, rank in enumerate(names):
+        hint = "Leitung" if i == 0 else ("Teamleitung" if i == 1 else "Mitarbeiter")
+        people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
+        parts.append(f"**{rank} ({len(people)}) {hint}**")
+        if people:
+            parts.extend(display_line(m) for m in people)
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Ränge ändert nur die Leitung"))
+    return e
+
+
+async def embed_aufstellung(guild, db):
+    return await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+
+
+async def embed_abmeldung(guild, db):
+    return await embed_dienststatus(guild, db, title="Abmeldung", ping=False)
+
+
+async def embed_aufstellung_old(guild, db):
+    cur = await db.execute("SELECT user_id, area FROM roster")
+    rows = await cur.fetchall()
+    assigned = {r["user_id"]: r["area"] for r in rows}
+
+    buckets = {a: [] for a in ROSTER_AREAS}
+    for m in staff_members(guild):
+        area = assigned.get(m.id, "Nicht eingeteilt")
+        if area not in buckets:
+            area = "Nicht eingeteilt"
+        buckets[area].append(m)
+
+    e = discord.Embed(title="Aufstellung", color=0x2B2D31)
+    parts = []
+    for area in ROSTER_AREAS:
+        people = sorted(buckets[area], key=lambda x: x.display_name.lower())
+        parts.append(f"**{area} ({len(people)})**")
+        if people:
+            parts.extend(display_line(m) for m in people)
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Einteilung über die Buttons"))
+    return e
+
+
+async def embed_dienststatus(guild, db, title="Aufstellung", ping=False):
+    cur = await db.execute("SELECT user_id, status, reason FROM attendance")
+    rows = {r["user_id"]: r for r in await cur.fetchall()}
+
+    buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
+    for m in visible_members(guild):
+        row = rows.get(m.id)
+        status = row["status"] if row else "offen"
+        if status not in buckets:
+            status = "offen"
+        reason = row["reason"] if row else None
+        buckets[status].append((m, reason))
+
+    def block(title, key):
+        items = sorted(buckets[key], key=lambda x: x[0].display_name.lower())
+        lines = [f"**{title} ({len(items)})**"]
+        for m, reason in items:
+            extra = f"   Grund: {reason}" if reason and key == "abgemeldet" else ""
+            lines.append(display_line(m) + extra)
+        if len(items) == 0:
+            lines.append("_niemand_")
+        return "\n".join(lines)
+
+    e = discord.Embed(title=title, color=0x2B2D31)
+    body = "\n\n".join(
+        [
+            block("Angemeldet", "angemeldet"),
+            block("Abgemeldet", "abgemeldet"),
+            block("Offen", "offen"),
+        ]
+    )
+    e.description = f"{ping_ophelia(guild)}\n\n{body}" if ping else body
+    e.set_footer(text=now_footer("Buttons unten"))
+    return e
+
+
+async def embed_katalog(db):
+    cur = await db.execute("SELECT name, description FROM catalog ORDER BY id")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Sanktionskatalog", color=0x2B2D31)
+    parts = []
+    for r in rows:
+        parts.append(f"**{r['name']}**")
+        parts.append(f"Strafe: {r['description']}")
+        parts.append("")
+    e.description = "\n".join(parts).strip() or "_noch leer_"
+    e.set_footer(text=now_footer("nur Leitung ändert den Katalog"))
+    return e
+
+
+async def embed_sanktionen(guild, db):
+    cur = await db.execute(
+        "SELECT user_id, reason, created_at FROM warnings ORDER BY id DESC LIMIT 15"
+    )
+    warns = await cur.fetchall()
+    warn_count = defaultdict(int)
+    cur = await db.execute("SELECT user_id, COUNT(*) AS c FROM warnings GROUP BY user_id")
+    for r in await cur.fetchall():
+        warn_count[r["user_id"]] = r["c"]
+
+    cur = await db.execute(
+        "SELECT user_id, kind, reason, until_text FROM sanctions WHERE active = 1 ORDER BY id DESC"
+    )
+    active = await cur.fetchall()
+
+    def name(uid):
+        m = guild.get_member(uid)
+        return display_line(m) if m else f"`{uid}`"
+
+    e = discord.Embed(title="Aktive Sanktionen", color=0x2B2D31)
+    parts = ["**Verwarnungen**"]
+    if warns:
+        seen = set()
+        for w in warns:
+            if w["user_id"] in seen:
                 continue
-            ch = guild.get_channel(row["channel_id"])
-            if not ch:
-                continue
-            try:
-                msg = await ch.fetch_message(row["message_id"])
-            except discord.NotFound:
-                continue
-            embed = await embed_coro
-            try:
-                await msg.edit(embed=embed, view=view)
-            except discord.HTTPException:
-                pass
-
-    async def post_panel(self, channel: discord.TextChannel, key: str):
-        guild = channel.guild
-        builders = {
-            "mitarbeiter": (panels.embed_mitarbeiter(guild), None),
-            "memberliste": (panels.embed_memberliste(guild), None),
-            "rang": (panels.embed_rangsystem(guild), views.RangView(self)),
-            "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": (panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
-            "katalog": (panels.embed_katalog(self.db), None),
-            "sanktionen": (panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
-            "ausruestung": (panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
-            "lager": (panels.embed_lager(self.db), views.LagerView(self)),
-            "urlaub": (panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
-            "infos": (panels.embed_infos(self.db), None),
-            "arbeiter": (panels.embed_arbeiter(guild, self.db), None),
-            "tickets": (panels.embed_tickets(), views.TicketView(self)),
-            "regeln": (panels.embed_regeln(self.db), None),
-            "status": (panels.embed_status(self.db), views.StatusView(self)),
-            "aktivitaet": (panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
-            "notizen": (panels.embed_notizen(self.db), None),
-            "blacklist": (panels.embed_blacklist(self.db), views.BlacklistView(self)),
-            "pflicht": (panels.embed_pflicht(), None),
-            "routen": (panels.embed_routes(self.db), None),
-            "einkauf": (panels.embed_einkauf(self.db), None),
-            "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
-            "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
-            "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
-            "abgaben": (panels.embed_abgaben(self.db), views.AbgabeView(self)),
-            "kasse": (panels.embed_kasse(self.db), views.KasseView(self)),
-        }
-        embed_coro, view = builders[key]
-        embed = await embed_coro
-        files = []
-        if key == "aktivitaet":
-            img = Path(__file__).resolve().parent.parent / "assets" / "aktivitaet.png"
-            if img.exists():
-                files.append(discord.File(img, filename="aktivitaet.png"))
-                embed.set_image(url="attachment://aktivitaet.png")
-        msg = await channel.send(embed=embed, view=view, files=files)
-        await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
-        return msg
-
-
-bot = ClubBot()
-
-
-@bot.event
-async def on_ready():
-    await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="Ophelia Manager")
-    )
-    print(f"Ophelia Manager online als {bot.user} ({bot.user.id})")
-    for g in bot.guilds:
-        raw = await database.get_setting(bot.db, f"ranks:{g.id}")
-        lead = await database.get_setting(bot.db, f"leaders:{g.id}")
-        off = await database.get_setting(bot.db, f"officers:{g.id}")
-        web_ranks = await database.get_setting(bot.db, "web_ranks")
-        web_lead = await database.get_setting(bot.db, "web_leaders")
-        web_off = await database.get_setting(bot.db, "web_officers")
-        web_areas = await database.get_setting(bot.db, "web_areas")
-        if web_areas:
-            set_areas([x.strip() for x in web_areas.splitlines() if x.strip()])
-        if web_ranks:
-            raw = "|".join(x.strip() for x in web_ranks.splitlines() if x.strip())
-            lead = "|".join(x.strip() for x in (web_lead or "").splitlines() if x.strip()) or lead
-            off = "|".join(x.strip() for x in (web_off or "").splitlines() if x.strip()) or off
-        if raw:
-            set_guild_roles(
-                g.id,
-                raw.split("|"),
-                (lead.split("|") if lead else None),
-                (off.split("|") if off else None),
-            )
-        try:
-            await bot.refresh_panels(g)
-        except Exception as e:
-            print("Refresh error", g.id, e)
-
-
-async def _named_channel(guild, key):
-    raw = await database.get_setting(bot.db, f"{key}:{guild.id}")
-    if not raw:
-        return None
-    return guild.get_channel(int(raw))
-
-
-async def _delete_clip(guild, user_id):
-    cur = await bot.db.execute("SELECT channel_id FROM clip_channels WHERE user_id = ?", (user_id,))
-    row = await cur.fetchone()
-    if not row:
-        return
-    ch = guild.get_channel(row["channel_id"])
-    if ch:
-        try:
-            await ch.delete(reason="Blood-Out")
-        except discord.HTTPException:
-            pass
-    await bot.db.execute("DELETE FROM clip_channels WHERE user_id = ?", (user_id,))
-    await bot.db.commit()
-
-
-@bot.event
-async def on_member_join(member: discord.Member):
-    await bot.refresh_panels(member.guild, ["memberliste", "mitarbeiter", "dienst"])
-    msg = f"Das ist dein Blood-In {member.mention} – Willkommen bei Ophelia"
-    ch = await _named_channel(member.guild, "bloodin_channel")
-    if ch:
-        await ch.send(msg)
+            seen.add(w["user_id"])
+            parts.append(f"{name(w['user_id'])} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
     else:
-        await bot.log(member.guild, msg)
+        parts.append("_keine_")
 
-
-@bot.event
-async def on_member_remove(member: discord.Member):
-    await _delete_clip(member.guild, member.id)
-    await bot.refresh_panels(member.guild, ["memberliste", "mitarbeiter", "dienst", "aufstellung", "rang"])
-    msg = f"Das ist dein Blood-Out **{member}**"
-    ch = await _named_channel(member.guild, "bloodout_channel")
-    if ch:
-        await ch.send(msg)
+    parts.append("")
+    parts.append(f"**Laufende Sanktionen ({len(active)})**")
+    if active:
+        for s in active:
+            until = f" | bis {s['until_text']}" if s["until_text"] else ""
+            parts.append(f"{name(s['user_id'])} | {s['kind']}{until} | {s['reason']}")
     else:
-        await bot.log(member.guild, msg)
+        parts.append("_keine_")
+
+    e.description = "\n".join(parts)
+    e.set_footer(text=now_footer())
+    return e
 
 
-@bot.event
-async def on_member_update(before: discord.Member, after: discord.Member):
-    if before.roles != after.roles or before.nick != after.nick or before.display_name != after.display_name:
-        await bot.refresh_panels(
-            after.guild,
-            ["memberliste", "mitarbeiter", "rang", "dienst", "aufstellung", "ausruestung", "arbeiter"],
-        )
+async def embed_ausruestung(guild, db):
+    cur = await db.execute("SELECT name FROM equipment_items ORDER BY id")
+    items = [r["name"] for r in await cur.fetchall()]
+    cur = await db.execute("SELECT user_id, status, missing FROM equipment")
+    status_map = {r["user_id"]: r for r in await cur.fetchall()}
+
+    buckets = {"vollständig": [], "unvollständig": [], "ungeprüft": []}
+    for m in staff_members(guild):
+        row = status_map.get(m.id)
+        st = row["status"] if row else "ungeprüft"
+        missing = row["missing"] if row else None
+        buckets.setdefault(st, buckets["ungeprüft"])
+        if st not in buckets:
+            st = "ungeprüft"
+        buckets[st].append((m, missing))
+
+    e = discord.Embed(title="Pflichtausrüstung", color=0x2B2D31)
+    soll = "\n".join(f"• {i}" for i in items) or "_nicht festgelegt_"
+    parts = [f"**Soll-Ausrüstung**\n{soll}", ""]
+    for title, key in (
+        ("Vollständig", "vollständig"),
+        ("Unvollständig", "unvollständig"),
+        ("Nicht geprüft", "ungeprüft"),
+    ):
+        group = sorted(buckets[key], key=lambda x: x[0].display_name.lower())
+        parts.append(f"**{title} ({len(group)})**")
+        if group:
+            for m, missing in group:
+                extra = f" | fehlt: {missing}" if missing and key == "unvollständig" else ""
+                parts.append(display_line(m) + extra)
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Prüfung durch Leitung / Clubleitung"))
+    return e
 
 
-@bot.tree.command(name="setup", description="Eine Live-Liste in diesen Kanal setzen")
-@app_commands.describe(panel="Welche Liste soll hier stehen?")
-@app_commands.choices(panel=[app_commands.Choice(name=n, value=n) for n in PANEL_NAMES])
-async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice[str]):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    await bot.post_panel(interaction.channel, panel.value)
-    await interaction.followup.send(
-        f"Ophelia Manager hat **{panel.value}** hier gepostet. Die Liste bleibt aktuell.",
-        ephemeral=True,
+async def embed_lager(db):
+    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY category, item")
+    rows = await cur.fetchall()
+    grouped = defaultdict(list)
+    for r in rows:
+        grouped[r["category"]].append(r)
+
+    clean = []
+    for cat, items in grouped.items():
+        clean.append(f"**{cat}**")
+        for r in items:
+            clean.append(f"{r['item']}  —  **{r['qty']}**")
+        clean.append("")
+
+    cur = await db.execute(
+        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 3"
     )
-
-
-@bot.tree.command(name="logkanal", description="Log-Kanal festlegen")
-async def logkanal(interaction: discord.Interaction, kanal: discord.TextChannel):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await database.set_setting(bot.db, f"log_channel:{interaction.guild.id}", str(kanal.id))
-    await interaction.response.send_message(f"Log-Kanal ist jetzt {kanal.mention}.", ephemeral=True)
-
-
-@bot.tree.command(name="bloodin_kanal", description="Kanal für Blood-In Willkommen")
-async def bloodin_kanal(interaction: discord.Interaction, kanal: discord.TextChannel):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
-    await database.set_setting(bot.db, f"bloodin_channel:{interaction.guild.id}", str(kanal.id))
-    await interaction.response.send_message(f"Blood-In Kanal: {kanal.mention}", ephemeral=True)
-
-
-@bot.tree.command(name="bloodout_kanal", description="Kanal für Blood-Out")
-async def bloodout_kanal(interaction: discord.Interaction, kanal: discord.TextChannel):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
-    await database.set_setting(bot.db, f"bloodout_channel:{interaction.guild.id}", str(kanal.id))
-    await interaction.response.send_message(f"Blood-Out Kanal: {kanal.mention}", ephemeral=True)
-
-
-@bot.tree.command(name="kick", description="Blood-Out + Kick + Clip-Kanal löschen")
-async def kick_cmd(interaction: discord.Interaction, person: discord.Member):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
-    await _delete_clip(interaction.guild, person.id)
-    ch = await _named_channel(interaction.guild, "bloodout_channel")
-    text = f"Das ist dein Blood-Out {person.mention}"
-    if ch:
-        await ch.send(text)
+    logs = await cur.fetchall()
+    clean.append("**Letzte Bewegung**")
+    if logs:
+        for lg in logs:
+            sign = "+" if lg["delta"] > 0 else ""
+            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
     else:
-        await bot.log(interaction.guild, text)
-    try:
-        await person.kick(reason=f"Blood-Out durch {interaction.user}")
-    except discord.Forbidden:
-        return await interaction.response.send_message("Kick nicht erlaubt (Rechte/Rolle).", ephemeral=True)
-    await interaction.response.send_message(f"{person} wurde gekickt (Blood-Out).", ephemeral=True)
+        clean.append("_noch keine_")
+
+    e = discord.Embed(title="Lager", color=0x2B2D31)
+    e.description = "\n".join(clean).strip()
+    e.set_footer(text=now_footer("Bestand ändert sich bei jedem Klick"))
+    return e
 
 
-@bot.tree.command(name="rangrollen", description="Eure echten Discord-Rollen festlegen (oben nach unten)")
-@app_commands.describe(
-    rang1="Höchster Rang",
-    rang2="2. Rang",
-    rang3="3. Rang",
-    rang4="4. Rang",
-    rang5="5. Rang",
-    rang6="6. Rang",
-    rang7="7. Rang",
-    rang8="8. Rang",
-    leitung="Welche Rolle darf alles? (sonst = rang1)",
-    team="Welche Rolle darf Sanktionen/Aufstellung? (sonst = rang1+rang2)",
-)
-async def rangrollen(
-    interaction: discord.Interaction,
-    rang1: discord.Role,
-    rang2: discord.Role = None,
-    rang3: discord.Role = None,
-    rang4: discord.Role = None,
-    rang5: discord.Role = None,
-    rang6: discord.Role = None,
-    rang7: discord.Role = None,
-    rang8: discord.Role = None,
-    leitung: discord.Role = None,
-    team: discord.Role = None,
-):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung / Admin.", ephemeral=True)
-    ranks = [r.name for r in (rang1, rang2, rang3, rang4, rang5, rang6, rang7, rang8) if r]
-    leaders = [leitung.name] if leitung else [ranks[0]]
-    officers = [team.name] if team else ranks[:2]
-    set_guild_roles(interaction.guild.id, ranks, leaders, officers)
-    await database.set_setting(bot.db, f"ranks:{interaction.guild.id}", "|".join(ranks))
-    await database.set_setting(bot.db, f"leaders:{interaction.guild.id}", "|".join(leaders))
-    await database.set_setting(bot.db, f"officers:{interaction.guild.id}", "|".join(officers))
-    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste", "dienst"])
-    await interaction.response.send_message(
-        "Rang-Rollen gespeichert:\n" + "\n".join(f"{i+1}. {n}" for i, n in enumerate(ranks)),
-        ephemeral=True,
+async def embed_urlaub(guild, db):
+    cur = await db.execute(
+        "SELECT user_id, start, end, reason, status FROM vacations ORDER BY id DESC LIMIT 30"
     )
+    rows = await cur.fetchall()
+    buckets = defaultdict(list)
+    for r in rows:
+        buckets[r["status"]].append(r)
+
+    def name(uid):
+        m = guild.get_member(uid)
+        return display_line(m) if m else f"`{uid}`"
+
+    e = discord.Embed(title="Urlaub", color=0x2B2D31)
+    parts = []
+    for title, key in (
+        ("Beantragt", "beantragt"),
+        ("Genehmigt / Aktiv", "genehmigt"),
+        ("Abgelehnt", "abgelehnt"),
+    ):
+        items = buckets.get(key, [])
+        parts.append(f"**{title} ({len(items)})**")
+        if items:
+            for r in items:
+                parts.append(f"{name(r['user_id'])} | {r['start']} – {r['end']} | {r['reason']}")
+        else:
+            parts.append("_niemand_")
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer())
+    return e
 
 
-@bot.tree.command(name="befoerdern", description="Person auf eine Rang-Rolle setzen")
-async def befoerdern(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    allowed = rank_names(interaction.guild)
-    if not allowed:
-        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
-    if rolle.name not in allowed:
-        return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
-            ephemeral=True,
-        )
-    to_remove = [r for r in person.roles if r.name in allowed and r != rolle]
-    try:
-        if to_remove:
-            await person.remove_roles(*to_remove, reason=f"Beförderung durch {interaction.user}")
-        await person.add_roles(rolle, reason=f"Beförderung durch {interaction.user}")
-    except discord.Forbidden:
-        return await interaction.response.send_message(
-            "Bot darf diese Rolle nicht setzen. Bot-Rolle muss über den Rang-Rollen stehen.",
-            ephemeral=True,
-        )
-    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} hat {person.mention} nach **{rolle.name}** befördert.")
-    await interaction.response.send_message(f"{person.mention} ist jetzt **{rolle.name}**.", ephemeral=True)
+async def embed_infos(db):
+    cur = await db.execute("SELECT title, body, updated_at FROM infos ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Infos (Website)", color=0x2B2D31)
+    parts = []
+    for r in rows:
+        parts.append(f"**{r['title']}**")
+        parts.append(r["body"])
+        parts.append(f"_aktualisiert {r['updated_at']}_")
+        parts.append("")
+    e.description = "\n".join(parts).strip() or "_noch keine Infos auf der Website_"
+    e.set_footer(text=now_footer("eintragen über die Website"))
+    return e
 
 
-@bot.tree.command(name="degradieren", description="Person auf eine niedrigere Rang-Rolle setzen")
-async def degradieren(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    allowed = rank_names(interaction.guild)
-    if not allowed:
-        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
-    if rolle.name not in allowed:
-        return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
-            ephemeral=True,
-        )
-    to_remove = [r for r in person.roles if r.name in allowed and r != rolle]
-    try:
-        if to_remove:
-            await person.remove_roles(*to_remove, reason=f"Degradierung durch {interaction.user}")
-        await person.add_roles(rolle, reason=f"Degradierung durch {interaction.user}")
-    except discord.Forbidden:
-        return await interaction.response.send_message(
-            "Bot darf diese Rolle nicht setzen. Bot-Rolle muss über den Rang-Rollen stehen.",
-            ephemeral=True,
-        )
-    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} hat {person.mention} auf **{rolle.name}** degradiert.")
-    await interaction.response.send_message(f"{person.mention} ist jetzt **{rolle.name}**.", ephemeral=True)
+async def embed_arbeiter(guild, db):
+    cur = await db.execute("SELECT user_id, display_name, phone, verified, note FROM workers")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Arbeiter", color=0x2B2D31)
+    if not rows:
+        e.description = "_keine Einträge_"
+    else:
+        parts = []
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            label = display_line(m) if m else (r["display_name"] or str(r["user_id"]))
+            ver = "geprüft" if r["verified"] else "offen"
+            phone = r["phone"] or "—"
+            note = f" | {r['note']}" if r["note"] else ""
+            parts.append(f"{label} | Tel: {phone} | {ver}{note}")
+        e.description = "\n".join(parts)
+    e.set_footer(text=now_footer("keine Ausweis-Fotos gespeichert"))
+    return e
 
 
-async def _set_only_rank(member: discord.Member, rolle: discord.Role, actor: discord.Member, reason: str):
-    allowed = rank_names(member.guild)
-    to_remove = [r for r in member.roles if r.name in allowed and r != rolle]
-    if to_remove:
-        await member.remove_roles(*to_remove, reason=reason)
-    await member.add_roles(rolle, reason=reason)
+async def embed_regeln(db):
+    from database import get_setting
+
+    text = await get_setting(db, "regeln", "") or "_Noch keine Regeln. Auf der Website eintragen._"
+    e = discord.Embed(title="Regeln", color=0x3B82C4)
+    e.description = text[:4000]
+    e.set_footer(text=now_footer("bearbeiten auf der Website"))
+    return e
 
 
-@bot.tree.command(name="bloodin", description="Person als Mitarbeiter aufnehmen (Rang-Rolle setzen)")
-async def bloodin(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    allowed = rank_names(interaction.guild)
-    if not allowed:
-        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
-    if rolle.name not in allowed:
-        return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
-            ephemeral=True,
-        )
-    try:
-        await _set_only_rank(person, rolle, interaction.user, f"Blood In durch {interaction.user}")
-    except discord.Forbidden:
-        return await interaction.response.send_message(
-            "Bot-Rolle muss über den Rang-Rollen stehen.",
-            ephemeral=True,
-        )
-    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste", "dienst"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} Blood In: {person.mention} → **{rolle.name}**")
-    await interaction.response.send_message(f"{person.mention} ist drin als **{rolle.name}**.", ephemeral=True)
+async def embed_status(db):
+    from database import get_setting
+
+    state = await get_setting(db, "club_status", "geschlossen") or "geschlossen"
+    text = await get_setting(db, "club_status_text", "") or ""
+    title = "Club geöffnet" if state == "offen" else "Club geschlossen"
+    e = discord.Embed(title=title, color=0x3BA55D if state == "offen" else 0xDA373C)
+    e.description = text or "_Kein extra Text._"
+    e.set_footer(text=now_footer("Website oder Buttons"))
+    return e
 
 
-@bot.tree.command(name="bloodout", description="Alle Mitarbeiter-Ränge entfernen")
-async def bloodout(interaction: discord.Interaction, person: discord.Member):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    allowed = rank_names(interaction.guild)
-    to_remove = [r for r in person.roles if r.name in allowed]
-    if not to_remove:
-        return await interaction.response.send_message("Die Person hat keinen Mitarbeiter-Rang.", ephemeral=True)
-    try:
-        await person.remove_roles(*to_remove, reason=f"Blood Out durch {interaction.user}")
-    except discord.Forbidden:
-        return await interaction.response.send_message(
-            "Bot-Rolle muss über den Rang-Rollen stehen.",
-            ephemeral=True,
-        )
-    await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (person.id,))
-    await bot.db.execute("DELETE FROM roster WHERE user_id = ?", (person.id,))
-    await bot.db.commit()
-    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste", "dienst", "aufstellung"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} Blood Out: {person.mention}")
-    await interaction.response.send_message(f"{person.mention} hat keine Mitarbeiter-Ränge mehr.", ephemeral=True)
-
-
-@bot.tree.command(name="urlaub_status", description="Urlaub genehmigen oder ablehnen")
-@app_commands.describe(status="genehmigt oder abgelehnt")
-async def urlaub_status(interaction: discord.Interaction, person: discord.Member, status: str):
-    if not is_officer(interaction.user):
-        return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
-    status = status.lower().strip()
-    if status not in {"genehmigt", "abgelehnt"}:
-        return await interaction.response.send_message("Status: genehmigt oder abgelehnt", ephemeral=True)
-    cur = await bot.db.execute(
-        "SELECT id FROM vacations WHERE user_id = ? AND status = 'beantragt' ORDER BY id DESC LIMIT 1",
-        (person.id,),
+async def embed_aktivitaet(guild, db):
+    cur = await db.execute("SELECT user_id, stamped_at FROM activity ORDER BY stamped_at")
+    rows = await cur.fetchall()
+    done_ids = {r["user_id"] for r in rows}
+    staff = visible_members(guild)
+    here = [m for m in staff if m.id in done_ids]
+    missing = [m for m in staff if m.id not in done_ids]
+    e = discord.Embed(title="Aktivitätscheck", color=0x2B2D31)
+    def block(title, people):
+        people = sorted(people, key=lambda x: x.display_name.lower())
+        lines = [f"**{title} ({len(people)})**"]
+        if people:
+            lines.extend(display_line(m) for m in people)
+        else:
+            lines.append("_niemand_")
+        return "\n".join(lines)
+    e.description = (
+        ping_ophelia(guild)
+        + "\n\n"
+        + block("Haben reagiert", here)
+        + "\n\n"
+        + block("Fehlen noch", missing)
     )
-    row = await cur.fetchone()
-    if not row:
-        return await interaction.response.send_message("Kein offener Antrag.", ephemeral=True)
-    await bot.db.execute("UPDATE vacations SET status = ? WHERE id = ?", (status, row["id"]))
-    await bot.db.commit()
-    await bot.refresh_panels(interaction.guild, ["urlaub"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} hat Urlaub von {person.mention} **{status}**.")
-    await interaction.response.send_message("Urlaub aktualisiert.", ephemeral=True)
+    e.set_footer(text=now_footer("Button: Hier"))
+    return e
 
 
-@bot.tree.command(name="sanktion_aufheben", description="Letzte aktive Sanktion einer Person aufheben")
-async def sanktion_aufheben(interaction: discord.Interaction, person: discord.Member):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await bot.db.execute(
-        "UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1",
-        (person.id,),
+async def embed_notizen(db):
+    cur = await db.execute("SELECT title, body, created_at FROM notes ORDER BY id DESC LIMIT 15")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Notizen", color=0x2B2D31)
+    if not rows:
+        e.description = "_Keine Notizen. Auf der Website eintragen._"
+    else:
+        parts = []
+        for r in rows:
+            parts.append(f"**{r['title']}**")
+            parts.append(r["body"])
+            parts.append(f"_{r['created_at']}_")
+            parts.append("")
+        e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_blacklist(db):
+    cur = await db.execute("SELECT name, created_at FROM blacklist ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Blacklist", color=0x2B2D31)
+    e.description = "\n".join(f"• {r['name']}  ·  {r['created_at']}" for r in rows) or "_leer_"
+    e.set_footer(text=now_footer("nur Rang 12–9"))
+    return e
+
+
+async def embed_rangtabelle():
+    from rules_data import RANK_INFO
+    e = discord.Embed(title="Rangsystem", color=0x3B82C4)
+    parts = []
+    for name, desc in RANK_INFO:
+        parts.append(f"**{name}**")
+        parts.append(desc)
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_pflicht():
+    from rules_data import EQUIPMENT_TEXT
+    e = discord.Embed(title="Ophelia | Pflicht Ausrüstungen", color=0x2B2D31)
+    e.description = EQUIPMENT_TEXT
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_routes(db):
+    cur = await db.execute("SELECT name FROM routes ORDER BY id")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Unsere Routen", color=0x2B2D31)
+    e.description = "\n".join(f"• {r['name']}" for r in rows) or "_keine Routen_"
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_einkauf(db):
+    cur = await db.execute("SELECT body FROM einkauf ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Eingekauft", color=0x2B2D31)
+    e.description = "\n".join(r["body"] for r in rows) or "_nichts eingetragen_"
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_routecheck(db):
+    cur = await db.execute("SELECT body, created_at FROM routechecks ORDER BY id DESC LIMIT 15")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Routenkontrolle", color=0x2B2D31)
+    e.description = "\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Kontrolle_"
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_abgaben(db):
+    cur = await db.execute("SELECT body, created_at FROM abgaben ORDER BY id DESC LIMIT 20")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Abgaben", color=0x2B2D31)
+    e.description = "\n\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Abgaben_"
+    e.set_footer(text=now_footer("nur Leadership"))
+    return e
+
+
+async def embed_kasse(db):
+    from database import get_setting
+    amount = await get_setting(db, "frak_kasse", "0") or "0"
+    e = discord.Embed(title="Fraktionskasse", color=0x3B82C4)
+    e.description = f"**Bestand:** {amount}"
+    e.set_footer(text=now_footer("nur Leadership"))
+    return e
+
+
+async def embed_lootdrop(db):
+    cur = await db.execute("SELECT body, created_at FROM lootdrops ORDER BY id DESC LIMIT 10")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Lootdrop abgeben", color=0x2B2D31)
+    e.description = "\n\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_noch keine Abgabe_"
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_rollenanfrage():
+    e = discord.Embed(title="Rollen-Anfrage", color=0x3B82C4)
+    e.description = (
+        "Neu auf dem Server? Button **Rolle anfragen**.\n"
+        "Leadership (Rang 12–9) vergibt danach die Rolle."
     )
-    await bot.db.commit()
-    await bot.refresh_panels(interaction.guild, ["sanktionen"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} hat Sanktionen von {person.mention} aufgehoben.")
-    await interaction.response.send_message("Sanktionen aufgehoben.", ephemeral=True)
+    e.set_footer(text=now_footer())
+    return e
 
 
-@bot.tree.command(name="arbeiter_setzen", description="Arbeiter-Daten setzen (kein Ausweis-Foto)")
-async def arbeiter_setzen(
-    interaction: discord.Interaction,
-    person: discord.Member,
-    telefon: str = "",
-    notiz: str = "",
-    geprueft: bool = False,
-):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await bot.db.execute(
-        """
-        INSERT INTO workers(user_id, display_name, phone, verified, note)
-        VALUES(?, ?, ?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET
-            display_name=excluded.display_name,
-            phone=excluded.phone,
-            verified=excluded.verified,
-            note=excluded.note
-        """,
-        (person.id, person.display_name, telefon or None, 1 if geprueft else 0, notiz or None),
+async def embed_clipantrag():
+    from rules_data import CLIP_RULES
+    e = discord.Embed(title="Kill-Clip beantragen", color=0x3B82C4)
+    e.description = "Button → Kanal unter **Kill-Logs**.\n\n" + CLIP_RULES
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_tickets():
+    e = discord.Embed(title="Ophelia Manager • Tickets", color=0x3B82C4)
+    e.description = (
+        "Klick auf **Ticket öffnen** → es wird ein öffentlicher Kanal erstellt.\n"
+        "Klick auf **Clip-Kanal** → öffentlicher Kanal für Clips, den jeder sehen kann."
     )
-    await bot.db.commit()
-    await bot.refresh_panels(interaction.guild, ["arbeiter"])
-    await interaction.response.send_message("Arbeiter gespeichert.", ephemeral=True)
-
-
-@bot.tree.command(name="arbeiter_entfernen", description="Arbeiter austragen")
-async def arbeiter_entfernen(interaction: discord.Interaction, person: discord.Member):
-    if not is_leader(interaction.user):
-        return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await bot.db.execute("DELETE FROM workers WHERE user_id = ?", (person.id,))
-    await bot.db.commit()
-    await bot.refresh_panels(interaction.guild, ["arbeiter"])
-    await bot.log(interaction.guild, f"{interaction.user.mention} hat {person.mention} als Arbeiter entfernt.")
-    await interaction.response.send_message("Arbeiter entfernt.", ephemeral=True)
-
-
-async def start_web():
-    from webapp import make_app
-    import uvicorn
-
-    app = make_app(bot)
-    port = int(os.getenv("WEB_PORT", "8080"))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
-
-
-async def runner():
-    token = os.getenv("DISCORD_TOKEN")
-    if not token or token.startswith("hier_"):
-        print("DISCORD_TOKEN fehlt. Trage ihn in die Datei .env ein.")
-        # Website trotzdem starten, damit das Dashboard erreichbar ist
-        await start_web()
-        return
-    await asyncio.gather(bot.start(token), start_web())
-
-
-if __name__ == "__main__":
-    asyncio.run(runner())
+    e.set_footer(text=now_footer("Kanäle kann die Leitung später löschen"))
+    return e
