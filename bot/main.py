@@ -15,7 +15,7 @@ load_dotenv(ROOT / ".env")
 import database
 import panels
 import views
-from ranks import RANK_ROLE_NAMES, is_leader, is_officer
+from ranks import is_leader, is_officer, rank_names, set_areas, set_guild_roles
 
 
 intents = discord.Intents.default()
@@ -38,6 +38,18 @@ PANEL_NAMES = [
     "infos",
     "arbeiter",
     "tickets",
+    "regeln",
+    "status",
+    "aktivitaet",
+    "notizen",
+    "blacklist",
+    "pflicht",
+    "routen",
+    "einkauf",
+    "routecheck",
+    "lootdrop",
+    "rollenanfrage",
+    "clipantrag",
 ]
 
 
@@ -56,6 +68,13 @@ class ClubBot(commands.Bot):
         self.add_view(views.UrlaubView(self))
         self.add_view(views.RangView(self))
         self.add_view(views.TicketView(self))
+        self.add_view(views.AktivitaetView(self))
+        self.add_view(views.StatusView(self))
+        self.add_view(views.BlacklistView(self))
+        self.add_view(views.RolleAnfrageView(self))
+        self.add_view(views.ClipAntragView(self))
+        self.add_view(views.LootView(self))
+        self.add_view(views.RouteCheckView(self))
         await self.tree.sync()
 
     async def log(self, guild: discord.Guild, text: str):
@@ -74,7 +93,7 @@ class ClubBot(commands.Bot):
             "mitarbeiter": ("mitarbeiter", panels.embed_mitarbeiter(guild), None),
             "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
             "rang": ("rang", panels.embed_rangsystem(guild), views.RangView(self)),
-            "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.AufstellungView(self)),
+            "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": ("dienst", panels.embed_dienststatus(guild, self.db), views.DienstView(self)),
             "katalog": ("katalog", panels.embed_katalog(self.db), None),
             "sanktionen": ("sanktionen", panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
@@ -84,6 +103,18 @@ class ClubBot(commands.Bot):
             "infos": ("infos", panels.embed_infos(self.db), None),
             "arbeiter": ("arbeiter", panels.embed_arbeiter(guild, self.db), None),
             "tickets": ("tickets", panels.embed_tickets(), views.TicketView(self)),
+            "regeln": ("regeln", panels.embed_regeln(self.db), None),
+            "status": ("status", panels.embed_status(self.db), views.StatusView(self)),
+            "aktivitaet": ("aktivitaet", panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
+            "notizen": ("notizen", panels.embed_notizen(self.db), None),
+            "blacklist": ("blacklist", panels.embed_blacklist(self.db), views.BlacklistView(self)),
+            "pflicht": ("pflicht", panels.embed_pflicht(), None),
+            "routen": ("routen", panels.embed_routes(self.db), None),
+            "einkauf": ("einkauf", panels.embed_einkauf(self.db), None),
+            "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
+            "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
+            "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
+            "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
         }
         targets = names or list(mapping.keys())
         for name in targets:
@@ -110,7 +141,7 @@ class ClubBot(commands.Bot):
             "mitarbeiter": (panels.embed_mitarbeiter(guild), None),
             "memberliste": (panels.embed_memberliste(guild), None),
             "rang": (panels.embed_rangsystem(guild), views.RangView(self)),
-            "aufstellung": (panels.embed_aufstellung(guild, self.db), views.AufstellungView(self)),
+            "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": (panels.embed_dienststatus(guild, self.db), views.DienstView(self)),
             "katalog": (panels.embed_katalog(self.db), None),
             "sanktionen": (panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
@@ -120,6 +151,18 @@ class ClubBot(commands.Bot):
             "infos": (panels.embed_infos(self.db), None),
             "arbeiter": (panels.embed_arbeiter(guild, self.db), None),
             "tickets": (panels.embed_tickets(), views.TicketView(self)),
+            "regeln": (panels.embed_regeln(self.db), None),
+            "status": (panels.embed_status(self.db), views.StatusView(self)),
+            "aktivitaet": (panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
+            "notizen": (panels.embed_notizen(self.db), None),
+            "blacklist": (panels.embed_blacklist(self.db), views.BlacklistView(self)),
+            "pflicht": (panels.embed_pflicht(), None),
+            "routen": (panels.embed_routes(self.db), None),
+            "einkauf": (panels.embed_einkauf(self.db), None),
+            "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
+            "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
+            "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
+            "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
         }
         embed_coro, view = builders[key]
         embed = await embed_coro
@@ -138,22 +181,75 @@ async def on_ready():
     )
     print(f"Ophelia Manager online als {bot.user} ({bot.user.id})")
     for g in bot.guilds:
+        raw = await database.get_setting(bot.db, f"ranks:{g.id}")
+        lead = await database.get_setting(bot.db, f"leaders:{g.id}")
+        off = await database.get_setting(bot.db, f"officers:{g.id}")
+        web_ranks = await database.get_setting(bot.db, "web_ranks")
+        web_lead = await database.get_setting(bot.db, "web_leaders")
+        web_off = await database.get_setting(bot.db, "web_officers")
+        web_areas = await database.get_setting(bot.db, "web_areas")
+        if web_areas:
+            set_areas([x.strip() for x in web_areas.splitlines() if x.strip()])
+        if web_ranks:
+            raw = "|".join(x.strip() for x in web_ranks.splitlines() if x.strip())
+            lead = "|".join(x.strip() for x in (web_lead or "").splitlines() if x.strip()) or lead
+            off = "|".join(x.strip() for x in (web_off or "").splitlines() if x.strip()) or off
+        if raw:
+            set_guild_roles(
+                g.id,
+                raw.split("|"),
+                (lead.split("|") if lead else None),
+                (off.split("|") if off else None),
+            )
         try:
             await bot.refresh_panels(g)
         except Exception as e:
             print("Refresh error", g.id, e)
 
 
+async def _named_channel(guild, key):
+    raw = await database.get_setting(bot.db, f"{key}:{guild.id}")
+    if not raw:
+        return None
+    return guild.get_channel(int(raw))
+
+
+async def _delete_clip(guild, user_id):
+    cur = await bot.db.execute("SELECT channel_id FROM clip_channels WHERE user_id = ?", (user_id,))
+    row = await cur.fetchone()
+    if not row:
+        return
+    ch = guild.get_channel(row["channel_id"])
+    if ch:
+        try:
+            await ch.delete(reason="Blood-Out")
+        except discord.HTTPException:
+            pass
+    await bot.db.execute("DELETE FROM clip_channels WHERE user_id = ?", (user_id,))
+    await bot.db.commit()
+
+
 @bot.event
 async def on_member_join(member: discord.Member):
     await bot.refresh_panels(member.guild, ["memberliste", "mitarbeiter", "dienst"])
-    await bot.log(member.guild, f"{member.mention} ist dem Server beigetreten.")
+    msg = f"Das ist dein Blood-In {member.mention} – Willkommen bei Ophelia"
+    ch = await _named_channel(member.guild, "bloodin_channel")
+    if ch:
+        await ch.send(msg)
+    else:
+        await bot.log(member.guild, msg)
 
 
 @bot.event
 async def on_member_remove(member: discord.Member):
+    await _delete_clip(member.guild, member.id)
     await bot.refresh_panels(member.guild, ["memberliste", "mitarbeiter", "dienst", "aufstellung", "rang"])
-    await bot.log(member.guild, f"**{member}** hat den Server verlassen.")
+    msg = f"Das ist dein Blood-Out **{member}**"
+    ch = await _named_channel(member.guild, "bloodout_channel")
+    if ch:
+        await ch.send(msg)
+    else:
+        await bot.log(member.guild, msg)
 
 
 @bot.event
@@ -187,16 +283,95 @@ async def logkanal(interaction: discord.Interaction, kanal: discord.TextChannel)
     await interaction.response.send_message(f"Log-Kanal ist jetzt {kanal.mention}.", ephemeral=True)
 
 
+@bot.tree.command(name="bloodin_kanal", description="Kanal für Blood-In Willkommen")
+async def bloodin_kanal(interaction: discord.Interaction, kanal: discord.TextChannel):
+    if not is_leader(interaction.user):
+        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
+    await database.set_setting(bot.db, f"bloodin_channel:{interaction.guild.id}", str(kanal.id))
+    await interaction.response.send_message(f"Blood-In Kanal: {kanal.mention}", ephemeral=True)
+
+
+@bot.tree.command(name="bloodout_kanal", description="Kanal für Blood-Out")
+async def bloodout_kanal(interaction: discord.Interaction, kanal: discord.TextChannel):
+    if not is_leader(interaction.user):
+        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
+    await database.set_setting(bot.db, f"bloodout_channel:{interaction.guild.id}", str(kanal.id))
+    await interaction.response.send_message(f"Blood-Out Kanal: {kanal.mention}", ephemeral=True)
+
+
+@bot.tree.command(name="kick", description="Blood-Out + Kick + Clip-Kanal löschen")
+async def kick_cmd(interaction: discord.Interaction, person: discord.Member):
+    if not is_leader(interaction.user):
+        return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+    await _delete_clip(interaction.guild, person.id)
+    ch = await _named_channel(interaction.guild, "bloodout_channel")
+    text = f"Das ist dein Blood-Out {person.mention}"
+    if ch:
+        await ch.send(text)
+    else:
+        await bot.log(interaction.guild, text)
+    try:
+        await person.kick(reason=f"Blood-Out durch {interaction.user}")
+    except discord.Forbidden:
+        return await interaction.response.send_message("Kick nicht erlaubt (Rechte/Rolle).", ephemeral=True)
+    await interaction.response.send_message(f"{person} wurde gekickt (Blood-Out).", ephemeral=True)
+
+
+@bot.tree.command(name="rangrollen", description="Eure echten Discord-Rollen festlegen (oben nach unten)")
+@app_commands.describe(
+    rang1="Höchster Rang",
+    rang2="2. Rang",
+    rang3="3. Rang",
+    rang4="4. Rang",
+    rang5="5. Rang",
+    rang6="6. Rang",
+    rang7="7. Rang",
+    rang8="8. Rang",
+    leitung="Welche Rolle darf alles? (sonst = rang1)",
+    team="Welche Rolle darf Sanktionen/Aufstellung? (sonst = rang1+rang2)",
+)
+async def rangrollen(
+    interaction: discord.Interaction,
+    rang1: discord.Role,
+    rang2: discord.Role = None,
+    rang3: discord.Role = None,
+    rang4: discord.Role = None,
+    rang5: discord.Role = None,
+    rang6: discord.Role = None,
+    rang7: discord.Role = None,
+    rang8: discord.Role = None,
+    leitung: discord.Role = None,
+    team: discord.Role = None,
+):
+    if not is_leader(interaction.user):
+        return await interaction.response.send_message("Nur Leitung / Admin.", ephemeral=True)
+    ranks = [r.name for r in (rang1, rang2, rang3, rang4, rang5, rang6, rang7, rang8) if r]
+    leaders = [leitung.name] if leitung else [ranks[0]]
+    officers = [team.name] if team else ranks[:2]
+    set_guild_roles(interaction.guild.id, ranks, leaders, officers)
+    await database.set_setting(bot.db, f"ranks:{interaction.guild.id}", "|".join(ranks))
+    await database.set_setting(bot.db, f"leaders:{interaction.guild.id}", "|".join(leaders))
+    await database.set_setting(bot.db, f"officers:{interaction.guild.id}", "|".join(officers))
+    await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste", "dienst"])
+    await interaction.response.send_message(
+        "Rang-Rollen gespeichert:\n" + "\n".join(f"{i+1}. {n}" for i, n in enumerate(ranks)),
+        ephemeral=True,
+    )
+
+
 @bot.tree.command(name="befoerdern", description="Person auf eine Rang-Rolle setzen")
 async def befoerdern(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
     if not is_leader(interaction.user):
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    if rolle.name not in RANK_ROLE_NAMES:
+    allowed = rank_names(interaction.guild)
+    if not allowed:
+        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
+    if rolle.name not in allowed:
         return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(RANK_ROLE_NAMES),
+            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
             ephemeral=True,
         )
-    to_remove = [r for r in person.roles if r.name in RANK_ROLE_NAMES and r != rolle]
+    to_remove = [r for r in person.roles if r.name in allowed and r != rolle]
     try:
         if to_remove:
             await person.remove_roles(*to_remove, reason=f"Beförderung durch {interaction.user}")
@@ -215,12 +390,15 @@ async def befoerdern(interaction: discord.Interaction, person: discord.Member, r
 async def degradieren(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
     if not is_leader(interaction.user):
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    if rolle.name not in RANK_ROLE_NAMES:
+    allowed = rank_names(interaction.guild)
+    if not allowed:
+        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
+    if rolle.name not in allowed:
         return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(RANK_ROLE_NAMES),
+            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
             ephemeral=True,
         )
-    to_remove = [r for r in person.roles if r.name in RANK_ROLE_NAMES and r != rolle]
+    to_remove = [r for r in person.roles if r.name in allowed and r != rolle]
     try:
         if to_remove:
             await person.remove_roles(*to_remove, reason=f"Degradierung durch {interaction.user}")
@@ -236,7 +414,8 @@ async def degradieren(interaction: discord.Interaction, person: discord.Member, 
 
 
 async def _set_only_rank(member: discord.Member, rolle: discord.Role, actor: discord.Member, reason: str):
-    to_remove = [r for r in member.roles if r.name in RANK_ROLE_NAMES and r != rolle]
+    allowed = rank_names(member.guild)
+    to_remove = [r for r in member.roles if r.name in allowed and r != rolle]
     if to_remove:
         await member.remove_roles(*to_remove, reason=reason)
     await member.add_roles(rolle, reason=reason)
@@ -246,9 +425,12 @@ async def _set_only_rank(member: discord.Member, rolle: discord.Role, actor: dis
 async def bloodin(interaction: discord.Interaction, person: discord.Member, rolle: discord.Role):
     if not is_leader(interaction.user):
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    if rolle.name not in RANK_ROLE_NAMES:
+    allowed = rank_names(interaction.guild)
+    if not allowed:
+        return await interaction.response.send_message("Erst `/rangrollen` setzen.", ephemeral=True)
+    if rolle.name not in allowed:
         return await interaction.response.send_message(
-            "Rolle muss eine Rang-Rolle sein: " + ", ".join(RANK_ROLE_NAMES),
+            "Rolle muss eine Rang-Rolle sein: " + ", ".join(allowed),
             ephemeral=True,
         )
     try:
@@ -267,7 +449,8 @@ async def bloodin(interaction: discord.Interaction, person: discord.Member, roll
 async def bloodout(interaction: discord.Interaction, person: discord.Member):
     if not is_leader(interaction.user):
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    to_remove = [r for r in person.roles if r.name in RANK_ROLE_NAMES]
+    allowed = rank_names(interaction.guild)
+    to_remove = [r for r in person.roles if r.name in allowed]
     if not to_remove:
         return await interaction.response.send_message("Die Person hat keinen Mitarbeiter-Rang.", ephemeral=True)
     try:

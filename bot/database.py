@@ -113,22 +113,70 @@ async def init(db: aiosqlite.Connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS activity (
+            user_id INTEGER PRIMARY KEY,
+            stamped_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS notes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS blacklist (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            by_id INTEGER,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS lootdrops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS routes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS einkauf (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS routechecks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS clip_channels (
+            user_id INTEGER PRIMARY KEY,
+            channel_id INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS activity_fails (
+            user_id INTEGER PRIMARY KEY,
+            fails INTEGER NOT NULL DEFAULT 0
+        );
         """
     )
     await db.commit()
 
-    cur = await db.execute("SELECT COUNT(*) AS c FROM catalog")
-    if (await cur.fetchone())["c"] == 0:
+    seeded = await get_setting(db, "rules_seed", "0")
+    if seeded != "2":
+        await db.execute("DELETE FROM catalog")
+        from rules_data import SANCTION_RULES
         await db.executemany(
             "INSERT INTO catalog (name, description) VALUES (?, ?)",
-            [
-                ("Verwarnung", "Schriftlicher Eintrag. 3 Verwarnungen können eine Sanktion auslösen."),
-                ("Unentschuldigtes Fehlen", "Nicht erschienen ohne Abmeldung / Grund."),
-                ("Pflichtausrüstung fehlt", "Vorgeschriebene Ausrüstung nicht vollständig."),
-                ("Dienstverstoß", "Regelverstoß im Dienst."),
-                ("Schwere Pflichtverletzung", "Nur Leitung. Kann Degradierung nach sich ziehen."),
-            ],
+            [(f"REGEL {n} {title}", folge) for n, title, folge in SANCTION_RULES],
         )
+        await set_setting(db, "rules_seed", "2")
 
     cur = await db.execute("SELECT COUNT(*) AS c FROM inventory")
     if (await cur.fetchone())["c"] == 0:

@@ -3,7 +3,7 @@ from datetime import datetime
 
 import discord
 
-from ranks import RANK_ROLE_NAMES, ROSTER_AREAS, display_line, highest_rank, is_staff
+from ranks import ROSTER_AREAS, display_line, highest_rank, rank_names
 
 
 def now_footer(extra=""):
@@ -25,7 +25,8 @@ def staff_members(guild):
 
 
 async def embed_mitarbeiter(guild):
-    grouped = {r: [] for r in RANK_ROLE_NAMES}
+    names = rank_names(guild)
+    grouped = {r: [] for r in names}
     for m in staff_members(guild):
         rank = highest_rank(m)
         if rank:
@@ -33,7 +34,11 @@ async def embed_mitarbeiter(guild):
 
     e = discord.Embed(title="Mitarbeiterliste", color=0x2B2D31)
     lines = []
-    for rank in RANK_ROLE_NAMES:
+    if not names:
+        e.description = "Noch keine Rang-Rollen gesetzt.\nLeitung: `/rangrollen` mit euren echten Rollen."
+        e.set_footer(text=now_footer())
+        return e
+    for rank in names:
         members = sorted(grouped[rank], key=lambda x: (x.display_name.lower()))
         lines.append(f"**{rank} ({len(members)})**")
         if members:
@@ -48,12 +53,12 @@ async def embed_mitarbeiter(guild):
 
 async def embed_memberliste(guild):
     leaders, staff, members, bots = [], [], [], []
-    staff_ranks = set(RANK_ROLE_NAMES)
+    staff_ranks = set(rank_names(guild))
     for m in guild.members:
         names = {r.name for r in m.roles}
         if m.bot:
             bots.append(m)
-        elif names & {"Geschäftsleitung", "Clubleitung"}:
+        elif names & set(rank_names(guild)[:1]):
             leaders.append(m)
         elif names & staff_ranks:
             staff.append(m)
@@ -79,26 +84,24 @@ async def embed_memberliste(guild):
 
 
 async def embed_rangsystem(guild):
-    rights = {
-        "Geschäftsleitung": "Alles • Befördern / Degradieren • Config • Website",
-        "Clubleitung": "Sanktionen • Urlaub • Aufstellung • Lager • Ausrüstung",
-        "Leitende Servicekraft": "Warnungen • Aufstellung • Aktivität • Ausrüstung prüfen",
-        "Servicekraft": "An-/Abmelden • Urlaub beantragen • Lager (wenn erlaubt)",
-        "Junior-Servicekraft": "An-/Abmelden • Urlaub beantragen",
-        "Auszubildende/r": "An-/Abmelden • Urlaub beantragen",
-    }
-    grouped = {r: [] for r in RANK_ROLE_NAMES}
+    names = rank_names(guild)
+    grouped = {r: [] for r in names}
     for m in staff_members(guild):
         rank = highest_rank(m)
         if rank:
             grouped[rank].append(m)
 
     e = discord.Embed(title="Rangsystem", color=0x2B2D31)
+    if not names:
+        e.description = "Noch keine Rang-Rollen gesetzt. `/rangrollen` benutzen."
+        e.set_footer(text=now_footer())
+        return e
     parts = []
-    for rank in RANK_ROLE_NAMES:
+    for i, rank in enumerate(names):
+        hint = "Leitung" if i == 0 else ("Teamleitung" if i == 1 else "Mitarbeiter")
         people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
         parts.append(f"**{rank} ({len(people)})**")
-        parts.append(f"_{rights.get(rank, '')}_")
+        parts.append(f"_{hint}_")
         if people:
             parts.extend(display_line(m) for m in people)
         parts.append("")
@@ -108,6 +111,10 @@ async def embed_rangsystem(guild):
 
 
 async def embed_aufstellung(guild, db):
+    return await embed_dienststatus(guild, db)
+
+
+async def embed_aufstellung_old(guild, db):
     cur = await db.execute("SELECT user_id, area FROM roster")
     rows = await cur.fetchall()
     assigned = {r["user_id"]: r["area"] for r in rows}
@@ -176,7 +183,7 @@ async def embed_katalog(db):
     parts = []
     for r in rows:
         parts.append(f"**{r['name']}**")
-        parts.append(r["description"])
+        parts.append(f"Strafe: {r['description']}")
         parts.append("")
     e.description = "\n".join(parts).strip() or "_noch leer_"
     e.set_footer(text=now_footer("nur Leitung ändert den Katalog"))
@@ -363,6 +370,151 @@ async def embed_arbeiter(guild, db):
             parts.append(f"{label} | Tel: {phone} | {ver}{note}")
         e.description = "\n".join(parts)
     e.set_footer(text=now_footer("keine Ausweis-Fotos gespeichert"))
+    return e
+
+
+async def embed_regeln(db):
+    from database import get_setting
+
+    text = await get_setting(db, "regeln", "") or "_Noch keine Regeln. Auf der Website eintragen._"
+    e = discord.Embed(title="Regeln", color=0x3B82C4)
+    e.description = text[:4000]
+    e.set_footer(text=now_footer("bearbeiten auf der Website"))
+    return e
+
+
+async def embed_status(db):
+    from database import get_setting
+
+    state = await get_setting(db, "club_status", "geschlossen") or "geschlossen"
+    text = await get_setting(db, "club_status_text", "") or ""
+    title = "Club geöffnet" if state == "offen" else "Club geschlossen"
+    e = discord.Embed(title=title, color=0x3BA55D if state == "offen" else 0xDA373C)
+    e.description = text or "_Kein extra Text._"
+    e.set_footer(text=now_footer("Website oder Buttons"))
+    return e
+
+
+async def embed_aktivitaet(guild, db):
+    cur = await db.execute("SELECT user_id, stamped_at FROM activity ORDER BY stamped_at")
+    rows = await cur.fetchall()
+    done_ids = {r["user_id"] for r in rows}
+    staff = [m for m in guild.members if not m.bot and highest_rank(m)]
+    here = [m for m in staff if m.id in done_ids]
+    missing = [m for m in staff if m.id not in done_ids]
+    e = discord.Embed(title="Aktivitätscheck", color=0x2B2D31)
+    def block(title, people):
+        people = sorted(people, key=lambda x: x.display_name.lower())
+        lines = [f"**{title} ({len(people)})**"]
+        if people:
+            lines.extend(display_line(m) for m in people)
+        else:
+            lines.append("_niemand_")
+        return "\n".join(lines)
+    e.description = block("Haben reagiert", here) + "\n\n" + block("Fehlen noch", missing)
+    e.set_footer(text=now_footer("Button: Hier"))
+    return e
+
+
+async def embed_notizen(db):
+    cur = await db.execute("SELECT title, body, created_at FROM notes ORDER BY id DESC LIMIT 15")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Notizen", color=0x2B2D31)
+    if not rows:
+        e.description = "_Keine Notizen. Auf der Website eintragen._"
+    else:
+        parts = []
+        for r in rows:
+            parts.append(f"**{r['title']}**")
+            parts.append(r["body"])
+            parts.append(f"_{r['created_at']}_")
+            parts.append("")
+        e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_blacklist(db):
+    cur = await db.execute("SELECT name, created_at FROM blacklist ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Blacklist", color=0x2B2D31)
+    e.description = "\n".join(f"• {r['name']}  ·  {r['created_at']}" for r in rows) or "_leer_"
+    e.set_footer(text=now_footer("nur Rang 12–9"))
+    return e
+
+
+async def embed_rangtabelle():
+    from rules_data import RANK_INFO
+    e = discord.Embed(title="Rangsystem", color=0x3B82C4)
+    parts = []
+    for name, desc in RANK_INFO:
+        parts.append(f"**{name}**")
+        parts.append(desc)
+        parts.append("")
+    e.description = "\n".join(parts).strip()
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_pflicht():
+    from rules_data import EQUIPMENT_TEXT
+    e = discord.Embed(title="Ophelia | Pflicht Ausrüstungen", color=0x2B2D31)
+    e.description = EQUIPMENT_TEXT
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_routes(db):
+    cur = await db.execute("SELECT name FROM routes ORDER BY id")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Unsere Routen", color=0x2B2D31)
+    e.description = "\n".join(f"• {r['name']}" for r in rows) or "_keine Routen_"
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_einkauf(db):
+    cur = await db.execute("SELECT body FROM einkauf ORDER BY id DESC")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Eingekauft", color=0x2B2D31)
+    e.description = "\n".join(r["body"] for r in rows) or "_nichts eingetragen_"
+    e.set_footer(text=now_footer("Website"))
+    return e
+
+
+async def embed_routecheck(db):
+    cur = await db.execute("SELECT body, created_at FROM routechecks ORDER BY id DESC LIMIT 15")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Routenkontrolle", color=0x2B2D31)
+    e.description = "\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Kontrolle_"
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_lootdrop(db):
+    cur = await db.execute("SELECT body, created_at FROM lootdrops ORDER BY id DESC LIMIT 10")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Lootdrop abgeben", color=0x2B2D31)
+    e.description = "\n\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_noch keine Abgabe_"
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_rollenanfrage():
+    e = discord.Embed(title="Rollen-Anfrage", color=0x3B82C4)
+    e.description = (
+        "Neu auf dem Server? Button **Rolle anfragen**.\n"
+        "Leadership (Rang 12–9) vergibt danach die Rolle."
+    )
+    e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_clipantrag():
+    from rules_data import CLIP_RULES
+    e = discord.Embed(title="Kill-Clip beantragen", color=0x3B82C4)
+    e.description = "Button → Kanal unter **Kill-Logs**.\n\n" + CLIP_RULES
+    e.set_footer(text=now_footer())
     return e
 
 

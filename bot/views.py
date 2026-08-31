@@ -16,41 +16,37 @@ class ConfirmDenied(discord.ui.View):
 
 
 class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
-    grund = discord.ui.TextInput(
-        label="Grund (Pflicht)",
-        style=discord.TextStyle.paragraph,
-        required=True,
-        max_length=200,
-        placeholder="Warum meldest du dich ab?",
-    )
+    von = discord.ui.TextInput(label="Von wann", required=True, max_length=40)
+    bis = discord.ui.TextInput(label="Bis wann", required=True, max_length=40)
+    grund = discord.ui.TextInput(label="Warum", style=discord.TextStyle.paragraph, required=True, max_length=200)
+    wer = discord.ui.TextInput(label="Wer (leer = du)", required=False, max_length=40)
 
     def __init__(self, bot):
         super().__init__()
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        who = str(self.wer).strip() or str(interaction.user)
+        text = f"{self.von} – {self.bis} | {self.grund} | {who}"
         await self.bot.db.execute(
             """
             INSERT INTO attendance(user_id, status, reason, updated_at)
             VALUES(?, 'abgemeldet', ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET status='abgemeldet', reason=excluded.reason, updated_at=excluded.updated_at
             """,
-            (interaction.user.id, str(self.grund), stamp()),
+            (interaction.user.id, text, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["dienst"])
-        await self.bot.log(
-            interaction.guild,
-            f"{interaction.user.mention} hat sich abgemeldet. Grund: {self.grund}",
-        )
-        await interaction.response.send_message("Du bist jetzt **abgemeldet**.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} abgemeldet: {text}")
+        await interaction.response.send_message("Du bist **abgemeldet**.", ephemeral=True)
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
     person_id = discord.ui.TextInput(label="Discord-ID der Person", required=True, max_length=25)
-    kind = discord.ui.TextInput(label="Art (z.B. Dienstverstoß)", required=True, max_length=80)
-    dauer = discord.ui.TextInput(label="Dauer / bis wann", required=False, max_length=80)
-    grund = discord.ui.TextInput(label="Grund", style=discord.TextStyle.paragraph, required=True, max_length=300)
+    kind = discord.ui.TextInput(label="Regel-Nr (z.B. 2)", required=True, max_length=80)
+    dauer = discord.ui.TextInput(label="Bis wann", required=False, max_length=80)
+    grund = discord.ui.TextInput(label="Wie viel / Extra", style=discord.TextStyle.paragraph, required=True, max_length=300)
 
     def __init__(self, bot):
         super().__init__()
@@ -380,11 +376,17 @@ class SanktionView(discord.ui.View):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         await interaction.response.send_modal(WarnModal(self.bot))
 
-    @discord.ui.button(label="Sanktion eintragen", style=discord.ButtonStyle.danger, custom_id="san:add")
+    @discord.ui.button(label="Sanktion", style=discord.ButtonStyle.danger, custom_id="san:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_officer(interaction.user):
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
         await interaction.response.send_modal(SanktionModal(self.bot))
+
+    @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:pay")
+    async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        await interaction.response.send_modal(BezahltModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="san:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -488,3 +490,243 @@ class TicketView(discord.ui.View):
         await ch.send(f"{interaction.user.mention} — hier kannst du Clips posten. Der Kanal ist öffentlich.")
         await self.bot.log(interaction.guild, f"{interaction.user.mention} hat Clip-Kanal {ch.mention} erstellt.")
         await interaction.followup.send(f"Clip-Kanal erstellt: {ch.mention}", ephemeral=True)
+
+
+class AktivitaetView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Hier", style=discord.ButtonStyle.success, custom_id="akt:hier")
+    async def hier(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.bot.db.execute(
+            "INSERT INTO activity(user_id, stamped_at) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET stamped_at=excluded.stamped_at",
+            (interaction.user.id, stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["aktivitaet"])
+        await interaction.response.send_message("Eingecheckt.", ephemeral=True)
+
+    @discord.ui.button(label="Check neu starten", style=discord.ButtonStyle.danger, custom_id="akt:reset")
+    async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_officer(interaction.user):
+            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        await self.bot.db.execute("DELETE FROM activity")
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["aktivitaet"])
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} hat den Aktivitätscheck neu gestartet.")
+        await interaction.response.send_message("Check zurückgesetzt.", ephemeral=True)
+
+
+class StatusView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Öffnen", style=discord.ButtonStyle.success, custom_id="club:open")
+    async def open_club(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_officer(interaction.user):
+            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        import database as dbmod
+        await dbmod.set_setting(self.bot.db, "club_status", "offen")
+        await self.bot.refresh_panels(interaction.guild, ["status"])
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} hat den Club geöffnet.")
+        await interaction.response.send_message("Status: offen.", ephemeral=True)
+
+    @discord.ui.button(label="Schließen", style=discord.ButtonStyle.danger, custom_id="club:close")
+    async def close_club(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_officer(interaction.user):
+            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        import database as dbmod
+        await dbmod.set_setting(self.bot.db, "club_status", "geschlossen")
+        await self.bot.refresh_panels(interaction.guild, ["status"])
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} hat den Club geschlossen.")
+        await interaction.response.send_message("Status: geschlossen.", ephemeral=True)
+
+
+class BezahltModal(discord.ui.Modal, title="Sanktion bezahlt"):
+    person_id = discord.ui.TextInput(label="Discord-ID der Person", required=True, max_length=25)
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        try:
+            uid = int(str(self.person_id).strip())
+        except ValueError:
+            return await interaction.response.send_message("Ungültige ID.", ephemeral=True)
+        await self.bot.db.execute("UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,))
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
+        await interaction.response.send_message("Als bezahlt markiert.", ephemeral=True)
+
+
+class BlacklistModal(discord.ui.Modal, title="Blacklist"):
+    name = discord.ui.TextInput(label="Name", required=True, max_length=80)
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        await self.bot.db.execute(
+            "INSERT INTO blacklist(name, by_id, created_at) VALUES(?, ?, ?)",
+            (str(self.name).strip(), interaction.user.id, stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["blacklist"])
+        await interaction.response.send_message("Auf die Blacklist gesetzt.", ephemeral=True)
+
+
+class RolleGebenModal(discord.ui.Modal, title="Rolle vergeben"):
+    person_id = discord.ui.TextInput(label="Discord-ID", required=True, max_length=25)
+    rang = discord.ui.TextInput(label="Rang-Name genau", required=True, max_length=80, placeholder="Rang 1 – Associate")
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        from ranks import RANK_ROLE_NAMES
+        try:
+            uid = int(str(self.person_id).strip())
+        except ValueError:
+            return await interaction.response.send_message("Ungültige ID.", ephemeral=True)
+        rname = str(self.rang).strip()
+        if rname not in RANK_ROLE_NAMES:
+            return await interaction.response.send_message("Unbekannter Rang.", ephemeral=True)
+        member = interaction.guild.get_member(uid)
+        role = discord.utils.get(interaction.guild.roles, name=rname)
+        if not member or not role:
+            return await interaction.response.send_message("User oder Rolle nicht gefunden.", ephemeral=True)
+        try:
+            to_remove = [r for r in member.roles if r.name in RANK_ROLE_NAMES and r != role]
+            if to_remove:
+                await member.remove_roles(*to_remove)
+            await member.add_roles(role, reason=f"Rollen-Anfrage durch {interaction.user}")
+        except discord.Forbidden:
+            return await interaction.response.send_message("Bot-Rolle zu weit unten.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "dienst"])
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} gab {member.mention} **{rname}**")
+        await interaction.response.send_message(f"{member.mention} ist jetzt **{rname}**.", ephemeral=True)
+
+
+class LootModal(discord.ui.Modal, title="Lootdrop abgeben"):
+    body = discord.ui.TextInput(label="Was (wie im Beispiel)", style=discord.TextStyle.paragraph, required=True, max_length=800)
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.bot.db.execute(
+            "INSERT INTO lootdrops(body, created_at) VALUES(?, ?)",
+            (str(self.body), stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["lootdrop"])
+        await interaction.response.send_message("Lootdrop eingetragen.", ephemeral=True)
+
+
+class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
+    body = discord.ui.TextInput(
+        label="Route, wer, wie viele, Familie/Arbeiter",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=500,
+    )
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.bot.db.execute(
+            "INSERT INTO routechecks(body, created_at) VALUES(?, ?)",
+            (str(self.body), stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["routecheck"])
+        await interaction.response.send_message("Kontrolle eingetragen.", ephemeral=True)
+
+
+class BlacklistView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Blacklist", style=discord.ButtonStyle.danger, custom_id="bl:add")
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        await interaction.response.send_modal(BlacklistModal(self.bot))
+
+
+class RolleAnfrageView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Rolle anfragen", style=discord.ButtonStyle.primary, custom_id="role:ask")
+    async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} fragt eine Rolle an.")
+        await interaction.response.send_message("Anfrage ist raus. Leadership vergibt die Rolle.", ephemeral=True)
+
+    @discord.ui.button(label="Rolle vergeben", style=discord.ButtonStyle.success, custom_id="role:give")
+    async def give(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Rang 12–9.", ephemeral=True)
+        await interaction.response.send_modal(RolleGebenModal(self.bot))
+
+
+class ClipAntragView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Kill-Clip beantragen", style=discord.ButtonStyle.primary, custom_id="clip:ask")
+    async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from rules_data import CLIP_RULES
+        cat = None
+        for c in interaction.guild.categories:
+            if c.name.lower() in {"kill-logs", "kill logs", "killlogs"}:
+                cat = c
+                break
+        if cat is None:
+            cat = await interaction.guild.create_category("Kill-Logs")
+        safe = "".join(ch for ch in interaction.user.name.lower() if ch.isalnum() or ch in "-_")[:18] or "user"
+        channel = await interaction.guild.create_text_channel(name=f"clip-{safe}", category=cat)
+        await self.bot.db.execute(
+            "INSERT INTO clip_channels(user_id, channel_id) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET channel_id=excluded.channel_id",
+            (interaction.user.id, channel.id),
+        )
+        await self.bot.db.commit()
+        await channel.send(f"{interaction.user.mention}\n{CLIP_RULES}")
+        await interaction.response.send_message(f"Kanal: {channel.mention}", ephemeral=True)
+
+
+class LootView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Abgeben", style=discord.ButtonStyle.success, custom_id="loot:add")
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(LootModal(self.bot))
+
+
+class RouteCheckView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Kontrolle eintragen", style=discord.ButtonStyle.primary, custom_id="rc:add")
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RouteCheckModal(self.bot))
