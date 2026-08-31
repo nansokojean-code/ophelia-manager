@@ -50,6 +50,8 @@ PANEL_NAMES = [
     "lootdrop",
     "rollenanfrage",
     "clipantrag",
+    "abgaben",
+    "kasse",
 ]
 
 
@@ -75,6 +77,9 @@ class ClubBot(commands.Bot):
         self.add_view(views.ClipAntragView(self))
         self.add_view(views.LootView(self))
         self.add_view(views.RouteCheckView(self))
+        self.add_view(views.AbmeldungView(self))
+        self.add_view(views.AbgabeView(self))
+        self.add_view(views.KasseView(self))
         await self.tree.sync()
 
     async def log(self, guild: discord.Guild, text: str):
@@ -94,7 +99,7 @@ class ClubBot(commands.Bot):
             "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
             "rang": ("rang", panels.embed_rangsystem(guild), views.RangView(self)),
             "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": ("dienst", panels.embed_dienststatus(guild, self.db), views.DienstView(self)),
+            "dienst": ("dienst", panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": ("katalog", panels.embed_katalog(self.db), None),
             "sanktionen": ("sanktionen", panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
             "ausruestung": ("ausruestung", panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
@@ -115,9 +120,13 @@ class ClubBot(commands.Bot):
             "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
             "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
+            "abgaben": ("abgaben", panels.embed_abgaben(self.db), views.AbgabeView(self)),
+            "kasse": ("kasse", panels.embed_kasse(self.db), views.KasseView(self)),
         }
         targets = names or list(mapping.keys())
         for name in targets:
+            if name == "aktivitaet":
+                continue
             key, embed_coro, view = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
             if not row:
@@ -142,7 +151,7 @@ class ClubBot(commands.Bot):
             "memberliste": (panels.embed_memberliste(guild), None),
             "rang": (panels.embed_rangsystem(guild), views.RangView(self)),
             "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": (panels.embed_dienststatus(guild, self.db), views.DienstView(self)),
+            "dienst": (panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": (panels.embed_katalog(self.db), None),
             "sanktionen": (panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
             "ausruestung": (panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
@@ -163,10 +172,20 @@ class ClubBot(commands.Bot):
             "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
             "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
+            "abgaben": (panels.embed_abgaben(self.db), views.AbgabeView(self)),
+            "kasse": (panels.embed_kasse(self.db), views.KasseView(self)),
         }
         embed_coro, view = builders[key]
-        embed = await embed_coro
-        msg = await channel.send(embed=embed, view=view)
+        if key == "aktivitaet":
+            ping = panels.ping_ophelia(guild)
+            img = Path(__file__).resolve().parent.parent / "assets" / "aktivitaet.png"
+            kwargs = {"content": ping, "view": view}
+            if img.exists():
+                kwargs["file"] = discord.File(img, filename="aktivitaet.png")
+            msg = await channel.send(**kwargs)
+        else:
+            embed = await embed_coro
+            msg = await channel.send(embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 

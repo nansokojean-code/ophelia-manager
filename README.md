@@ -1,135 +1,127 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ophelia Manager</title>
-  <link rel="stylesheet" href="/static/style.css" />
-</head>
-<body>
-  <header>
-    <h1>Ophelia Manager</h1>
-    <p>{{ guild_name }} • Bot {% if online %}online{% else %}offline{% endif %}</p>
-    <p>Alles hier eintragen. Namen müssen <strong>genau so</strong> heißen wie die Discord-Rollen.</p>
-    <form method="post" action="/logout"><button class="ghost">Logout</button></form>
-  </header>
+# ClubBot – Discord-Listen + Website, 24/7
 
-  <section>
-    <h2>1. Eure Rollen</h2>
-    <p>Eine Rolle pro Zeile. Oben = höchster Rang.</p>
-    <form method="post" action="/settings">
-      <label>Rang-Rollen (Mitarbeiterliste)</label>
-      <textarea name="ranks" placeholder="Owner&#10;Manager&#10;Member">{{ ranks }}</textarea>
-      <label>Leitung (darf Ränge / Setup)</label>
-      <textarea name="leaders" placeholder="Owner">{{ leaders }}</textarea>
-      <label>Team (darf Sanktionen, Aufstellung)</label>
-      <textarea name="officers" placeholder="Owner&#10;Manager">{{ officers }}</textarea>
-      <label>Aufstellung-Bereiche</label>
-      <textarea name="areas" placeholder="Bar&#10;Tür&#10;Service">{{ areas }}</textarea>
-      <button type="submit">Rollen &amp; Bereiche speichern</button>
-    </form>
-  </section>
+Der Bot läuft **nicht auf deinem PC**. Er läuft auf einem Hoster im Internet.
+Wenn dein Rechner aus ist, bleibt der Bot trotzdem online.
 
-  <section>
-    <h2>2. Regeln</h2>
-    <form method="post" action="/regeln">
-      <textarea name="rules" placeholder="Regeln hier reinschreiben">{{ rules }}</textarea>
-      <button type="submit">Regeln speichern</button>
-    </form>
-  </section>
+Es gibt:
 
-  <section>
-    <h2>3. Club offen / geschlossen</h2>
-    <form method="post" action="/status">
-      <input name="club_status" value="{{ club_status }}" placeholder="offen oder geschlossen" />
-      <textarea name="status_text" placeholder="z.B. Heute ab 20 Uhr">{{ status_text }}</textarea>
-      <button type="submit">Status speichern</button>
-    </form>
-  </section>
+- Live-Listen in Discord (wie die Mitarbeiterliste)
+- Buttons unter den Listen
+- Eine Website, auf der Leitung Infos / Lager / Katalog einträgt
+- Alles wird in einer Datenbank gespeichert
 
-  <section>
-    <h2>4. Notizen</h2>
-    <form method="post" action="/notiz">
-      <input name="title" placeholder="Titel" required />
-      <textarea name="body" placeholder="Notiz" required></textarea>
-      <button type="submit">Notiz speichern</button>
-    </form>
-    <div class="list">
-      {% for n in notes %}
-      <article>
-        <h3>{{ n["title"] }}</h3>
-        <p>{{ n["body"] }}</p>
-        <small>{{ n["created_at"] }}</small>
-      </article>
-      {% endfor %}
-    </div>
-  </section>
+Ausweis-Fotos werden **nicht** gespeichert.
 
-  <section>
-    <h2>5. Infos für Discord</h2>
-    <form method="post" action="/info">
-      <input name="title" placeholder="Titel" required />
-      <textarea name="body" placeholder="Text" required></textarea>
-      <button type="submit">Info speichern</button>
-    </form>
-    <div class="list">
-      {% for i in infos %}
-      <article>
-        <h3>{{ i["title"] }}</h3>
-        <p>{{ i["body"] }}</p>
-        <small>{{ i["updated_at"] }}</small>
-        <form method="post" action="/info/delete">
-          <input type="hidden" name="info_id" value="{{ i['id'] }}" />
-          <button class="danger">Löschen</button>
-        </form>
-      </article>
-      {% endfor %}
-    </div>
-  </section>
+## 1. Discord vorbereiten
 
-  <section>
-    <h2>3. Lager</h2>
-    <form method="post" action="/lager">
-      <input name="item" placeholder="Gegenstand" required />
-      <input name="category" placeholder="Kategorie" value="Sonstiges" />
-      <input name="qty" type="number" placeholder="Menge" value="0" />
-      <button type="submit">Lager speichern</button>
-    </form>
-    <div class="list">
-      {% for l in lager %}
-      <p>{{ l["category"] }} • <strong>{{ l["item"] }}</strong> — {{ l["qty"] }}</p>
-      {% endfor %}
-    </div>
-  </section>
+1. Gehe zu https://discord.com/developers/applications
+2. Neue Application anlegen
+3. Links auf **Bot**
+   - Bot erstellen
+   - Token kopieren
+   - Privileged Gateway Intents: **SERVER MEMBERS INTENT** einschalten
+4. Links auf **OAuth2 → URL Generator**
+   - Scopes: `bot` + `applications.commands`
+   - Bot Permissions: Manage Roles, Manage Channels, Send Messages, Embed Links, Read Message History, Use Slash Commands, View Channels
+5. Den Link öffnen und den Bot auf den Server einladen
+6. Die Bot-Rolle in Discord **über** die Rang-Rollen schieben (sonst kann er nicht befördern)
 
-  <section>
-    <h2>4. Sanktionskatalog</h2>
-    <form method="post" action="/katalog">
-      <input name="name" placeholder="Name" required />
-      <textarea name="description" placeholder="Beschreibung" required></textarea>
-      <button type="submit">Hinzufügen</button>
-    </form>
-    <div class="list">
-      {% for c in catalog %}
-      <article>
-        <h3>{{ c["name"] }}</h3>
-        <p>{{ c["description"] }}</p>
-      </article>
-      {% endfor %}
-    </div>
-  </section>
+Rang-Rollen müssen **genau so** heißen:
 
-  <section>
-    <h2>5. Pflichtausrüstung</h2>
-    <form method="post" action="/ausruestung">
-      <input name="name" placeholder="z.B. Funk" required />
-      <button type="submit">Gegenstand hinzufügen</button>
-    </form>
-    <div class="list">
-      {% for e in eq %}
-      <p>{{ e["name"] }}</p>
-      {% endfor %}
-    </div>
-  </section>
-</body>
-</html>
+- Geschäftsleitung
+- Clubleitung
+- Leitende Servicekraft
+- Servicekraft
+- Junior-Servicekraft
+- Auszubildende/r
+
+## 2. Lokal testen (optional)
+
+```bash
+cd clubbot
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+# .env ausfüllen: DISCORD_TOKEN und WEB_PASSWORD
+python bot/main.py
+```
+
+Website dann: http://localhost:8080
+
+## 3. Dauerhaft hosten (PC aus = Bot bleibt an)
+
+Am einfachsten mit Railway oder Render.
+
+### Railway
+
+1. Account auf https://railway.app
+2. New Project → Deploy from GitHub **oder** leeres Projekt + Dockerfile
+3. Diese Ordner hochladen
+4. Variables setzen:
+   - `DISCORD_TOKEN`
+   - `WEB_PASSWORD`
+   - `WEB_PORT=8080`
+5. Public Domain für die Website erzeugen
+
+### Render
+
+1. https://render.com → New Web Service
+2. Dockerfile verwenden
+3. Dieselben Variablen setzen
+4. Instanz auf „always on“ lassen (Free-Tarif schläft oft ein – dann lieber 7 $/Monat Starter)
+
+### Eigenes Linux / VPS
+
+```bash
+docker compose up -d --build
+```
+
+`restart: always` startet den Bot nach jedem Absturz oder Server-Neustart neu.
+
+## 4. Auf dem Discord einrichten
+
+In den gewünschten Kanälen nacheinander:
+
+- `/setup panel:mitarbeiter`
+- `/setup panel:memberliste`
+- `/setup panel:rang`
+- `/setup panel:aufstellung`
+- `/setup panel:dienst`
+- `/setup panel:katalog`
+- `/setup panel:sanktionen`
+- `/setup panel:ausruestung`
+- `/setup panel:lager`
+- `/setup panel:urlaub`
+- `/setup panel:infos`
+- `/setup panel:arbeiter`
+- `/logkanal kanal:#logs`
+
+Die Nachricht bleibt stehen und **aktualisiert sich selbst**.
+
+## 5. Was die Website kann
+
+Login mit `WEB_PASSWORD`.
+
+Dort eintragen:
+
+- Infos (stehen danach in der Discord-Liste „Infos“)
+- Lager-Bestand
+- Sanktionskatalog-Punkte
+
+Änderungen auf der Website schreiben sofort die Discord-Nachricht um.
+
+## 6. Wichtige Slash-Commands (nur Setup / Leitung)
+
+| Command | Zweck |
+|---|---|
+| `/setup` | Liste in den aktuellen Kanal setzen |
+| `/logkanal` | Log-Kanal |
+| `/befoerdern` | Rang-Rolle setzen |
+| `/degradieren` | Rang-Rolle setzen |
+| `/urlaub_status` | Antrag genehmigen / ablehnen |
+| `/sanktion_aufheben` | Sanktion beenden |
+| `/arbeiter_setzen` | Name/Telefon/geprüft (kein Foto) |
+| `/arbeiter_entfernen` | Arbeiter austragen |
+
+Alltag läuft über **Buttons**, nicht über Commands.

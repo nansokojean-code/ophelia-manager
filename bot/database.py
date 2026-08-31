@@ -164,6 +164,12 @@ async def init(db: aiosqlite.Connection):
             user_id INTEGER PRIMARY KEY,
             fails INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS abgaben (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
         """
     )
     await db.commit()

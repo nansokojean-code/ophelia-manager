@@ -3,7 +3,7 @@ from datetime import datetime
 
 import discord
 
-from ranks import ROSTER_AREAS, display_line, highest_rank, rank_names
+from ranks import ROSTER_AREAS, display_line, hidden_from_lists, highest_rank, rank_names
 
 
 def now_footer(extra=""):
@@ -14,14 +14,26 @@ def now_footer(extra=""):
     return text
 
 
-def staff_members(guild):
+def visible_members(guild):
     people = []
     for m in guild.members:
         if m.bot:
             continue
-        if highest_rank(m):
-            people.append(m)
+        if hidden_from_lists(m):
+            continue
+        people.append(m)
     return people
+
+
+def staff_members(guild):
+    return [m for m in visible_members(guild) if highest_rank(m)]
+
+
+def ping_ophelia(guild):
+    for r in guild.roles:
+        if r.name.lower() in {"ophelia", "ophelia familie", "@ophelia"}:
+            return r.mention
+    return "@Ophelia"
 
 
 async def embed_mitarbeiter(guild):
@@ -52,35 +64,7 @@ async def embed_mitarbeiter(guild):
 
 
 async def embed_memberliste(guild):
-    leaders, staff, members, bots = [], [], [], []
-    staff_ranks = set(rank_names(guild))
-    for m in guild.members:
-        names = {r.name for r in m.roles}
-        if m.bot:
-            bots.append(m)
-        elif names & set(rank_names(guild)[:1]):
-            leaders.append(m)
-        elif names & staff_ranks:
-            staff.append(m)
-        else:
-            members.append(m)
-
-    def block(title, group):
-        group = sorted(group, key=lambda x: x.display_name.lower())
-        body = "\n".join(display_line(m) for m in group) if group else "_niemand_"
-        return f"**{title} ({len(group)})**\n{body}"
-
-    e = discord.Embed(title="Memberliste", color=0x2B2D31)
-    e.description = "\n\n".join(
-        [
-            block("Leitung", leaders),
-            block("Mitarbeiter", staff),
-            block("Mitglieder", members),
-            block("Bots", bots),
-        ]
-    )
-    e.set_footer(text=now_footer("neue Joins werden automatisch ergänzt"))
-    return e
+    return await embed_rangsystem(guild)
 
 
 async def embed_rangsystem(guild):
@@ -100,8 +84,7 @@ async def embed_rangsystem(guild):
     for i, rank in enumerate(names):
         hint = "Leitung" if i == 0 else ("Teamleitung" if i == 1 else "Mitarbeiter")
         people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
-        parts.append(f"**{rank} ({len(people)})**")
-        parts.append(f"_{hint}_")
+        parts.append(f"**{rank} ({len(people)}) {hint}**")
         if people:
             parts.extend(display_line(m) for m in people)
         parts.append("")
@@ -111,7 +94,11 @@ async def embed_rangsystem(guild):
 
 
 async def embed_aufstellung(guild, db):
-    return await embed_dienststatus(guild, db)
+    return await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+
+
+async def embed_abmeldung(guild, db):
+    return await embed_dienststatus(guild, db, title="Abmeldung", ping=False)
 
 
 async def embed_aufstellung_old(guild, db):
@@ -141,12 +128,12 @@ async def embed_aufstellung_old(guild, db):
     return e
 
 
-async def embed_dienststatus(guild, db):
+async def embed_dienststatus(guild, db, title="Aufstellung", ping=False):
     cur = await db.execute("SELECT user_id, status, reason FROM attendance")
     rows = {r["user_id"]: r for r in await cur.fetchall()}
 
     buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
-    for m in staff_members(guild):
+    for m in visible_members(guild):
         row = rows.get(m.id)
         status = row["status"] if row else "offen"
         if status not in buckets:
@@ -164,15 +151,16 @@ async def embed_dienststatus(guild, db):
             lines.append("_niemand_")
         return "\n".join(lines)
 
-    e = discord.Embed(title="Dienststatus", color=0x2B2D31)
-    e.description = "\n\n".join(
+    e = discord.Embed(title=title, color=0x2B2D31)
+    body = "\n\n".join(
         [
             block("Angemeldet", "angemeldet"),
             block("Abgemeldet", "abgemeldet"),
             block("Offen", "offen"),
         ]
     )
-    e.set_footer(text=now_footer("Buttons: Anmelden / Abmelden"))
+    e.description = f"{ping_ophelia(guild)}\n\n{body}" if ping else body
+    e.set_footer(text=now_footer("Buttons unten"))
     return e
 
 
@@ -399,7 +387,7 @@ async def embed_aktivitaet(guild, db):
     cur = await db.execute("SELECT user_id, stamped_at FROM activity ORDER BY stamped_at")
     rows = await cur.fetchall()
     done_ids = {r["user_id"] for r in rows}
-    staff = [m for m in guild.members if not m.bot and highest_rank(m)]
+    staff = visible_members(guild)
     here = [m for m in staff if m.id in done_ids]
     missing = [m for m in staff if m.id not in done_ids]
     e = discord.Embed(title="Aktivitätscheck", color=0x2B2D31)
@@ -411,7 +399,13 @@ async def embed_aktivitaet(guild, db):
         else:
             lines.append("_niemand_")
         return "\n".join(lines)
-    e.description = block("Haben reagiert", here) + "\n\n" + block("Fehlen noch", missing)
+    e.description = (
+        ping_ophelia(guild)
+        + "\n\n"
+        + block("Haben reagiert", here)
+        + "\n\n"
+        + block("Fehlen noch", missing)
+    )
     e.set_footer(text=now_footer("Button: Hier"))
     return e
 
@@ -488,6 +482,24 @@ async def embed_routecheck(db):
     e = discord.Embed(title="Routenkontrolle", color=0x2B2D31)
     e.description = "\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Kontrolle_"
     e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_abgaben(db):
+    cur = await db.execute("SELECT body, created_at FROM abgaben ORDER BY id DESC LIMIT 20")
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Abgaben", color=0x2B2D31)
+    e.description = "\n\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Abgaben_"
+    e.set_footer(text=now_footer("nur Leadership"))
+    return e
+
+
+async def embed_kasse(db):
+    from database import get_setting
+    amount = await get_setting(db, "frak_kasse", "0") or "0"
+    e = discord.Embed(title="Fraktionskasse", color=0x3B82C4)
+    e.description = f"**Bestand:** {amount}"
+    e.set_footer(text=now_footer("nur Leadership"))
     return e
 
 

@@ -27,6 +27,22 @@ OFFICER_ROLES = LEADER_ROLES | {
     "Rang 8 – Lieutenant",
 }
 
+GOD_ROLE = "nrw frakverwaltung"
+HIDDEN_ROLES = {"nrw frakverwaltung"}
+
+
+def _norm(name):
+    return " ".join(str(name).lower().split())
+
+
+def has_god(member):
+    return any(_norm(r.name) == _norm(GOD_ROLE) for r in member.roles)
+
+
+def hidden_from_lists(member):
+    names = {_norm(r.name) for r in member.roles}
+    return bool(names & {_norm(x) for x in HIDDEN_ROLES})
+
 ROSTER_AREAS = ["Bar", "Tür", "Service", "Büro", "Nicht eingeteilt"]
 
 GUILD_CFG = {}
@@ -72,7 +88,11 @@ def member_role_names(member):
 
 def is_leader(member):
     names = member_role_names(member)
-    return bool(names & cfg(member.guild)["leaders"]) or member.guild_permissions.administrator
+    return (
+        bool(names & cfg(member.guild)["leaders"])
+        or member.guild_permissions.administrator
+        or has_god(member)
+    )
 
 
 def is_officer(member):

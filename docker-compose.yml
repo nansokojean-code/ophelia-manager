@@ -1,52 +1,9 @@
-:root {
-  color-scheme: dark;
-  --bg: #1e1f22;
-  --card: #2b2d31;
-  --line: #3f4147;
-  --text: #f2f3f5;
-  --muted: #b5bac1;
-  --acc: #5865f2;
-  --danger: #da373c;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: "gg sans", "Noto Sans", Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  padding: 24px;
-}
-header, .card, section {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 20px;
-  margin: 0 auto 16px;
-  max-width: 860px;
-}
-h1, h2, h3 { margin: 0 0 8px; }
-p, small { color: var(--muted); }
-form { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
-input, textarea, button {
-  font: inherit;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  padding: 10px 12px;
-  background: #1e1f22;
-  color: var(--text);
-}
-textarea { min-height: 90px; }
-button {
-  background: var(--acc);
-  border: 0;
-  color: white;
-  cursor: pointer;
-  font-weight: 600;
-}
-button.ghost { background: transparent; border: 1px solid var(--line); }
-button.danger { background: var(--danger); }
-.list article {
-  border-top: 1px solid var(--line);
-  padding-top: 10px;
-  margin-top: 10px;
-}
+services:
+  clubbot:
+    build: .
+    restart: always
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
