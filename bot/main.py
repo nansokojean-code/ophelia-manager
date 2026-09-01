@@ -112,22 +112,36 @@ class ClubBot(commands.Bot):
         self.add_view(views.AbgabeView(self))
         self.add_view(views.KasseView(self))
         self.add_view(views.RouteView(self))
+        self.add_view(views.EinkaufView(self))
         self.add_view(views.ArbeiterView(self))
         try:
             await self.tree.sync()
         except Exception as exc:
             print("Command-Sync:", exc)
 
-    async def log(self, guild: discord.Guild, text: str):
+    async def log(self, guild: discord.Guild, text: str, kategorie="Allgemein"):
         raw = await database.get_setting(self.db, f"log_channel:{guild.id}")
-        if not raw:
+        ch = guild.get_channel(int(raw)) if raw else None
+        if not ch:
+            ch = discord.utils.find(lambda c: "log" in c.name.lower(), guild.text_channels)
+        if not ch:
             return
-        ch = guild.get_channel(int(raw))
-        if ch:
-            try:
-                await ch.send(text)
-            except discord.HTTPException:
-                pass
+        e = discord.Embed(title=kategorie, description=text, color=0x3B82C4)
+        thread = None
+        try:
+            for t in getattr(ch, "threads", []):
+                if t.name.lower() == str(kategorie).lower():
+                    thread = t
+                    break
+            if thread is None:
+                starter = await ch.send(f"**Kategorie: {kategorie}**")
+                thread = await starter.create_thread(name=str(kategorie)[:90])
+        except discord.HTTPException:
+            thread = None
+        try:
+            await (thread or ch).send(embed=e)
+        except discord.HTTPException:
+            pass
 
     async def refresh_panels(self, guild: discord.Guild, names=None):
         mapping = {
@@ -151,7 +165,7 @@ class ClubBot(commands.Bot):
             "blacklist": ("blacklist", panels.embed_blacklist(self.db), views.BlacklistView(self)),
             "pflicht": ("pflicht", panels.embed_pflicht(), None),
             "routen": ("routen", panels.embed_routes(self.db), views.RouteView(self)),
-            "einkauf": ("einkauf", panels.embed_einkauf(self.db), None),
+            "einkauf": ("einkauf", panels.embed_einkauf(self.db), views.EinkaufView(self)),
             "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
@@ -203,7 +217,7 @@ class ClubBot(commands.Bot):
             "blacklist": (panels.embed_blacklist(self.db), views.BlacklistView(self)),
             "pflicht": (panels.embed_pflicht(), None),
             "routen": (panels.embed_routes(self.db), views.RouteView(self)),
-            "einkauf": (panels.embed_einkauf(self.db), None),
+            "einkauf": (panels.embed_einkauf(self.db), views.EinkaufView(self)),
             "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
@@ -298,7 +312,7 @@ async def daily_clock():
             cur = await bot.db.execute("SELECT user_id, status FROM attendance")
             rows = {r["user_id"]: r["status"] for r in await cur.fetchall()}
             cur = await bot.db.execute(
-                "SELECT user_id FROM vacations WHERE status = 'genehmigt'"
+                "SELECT user_id FROM vacations WHERE status IN ('genehmigt', 'aktiv')"
             )
             vac = {r["user_id"] for r in await cur.fetchall()}
             hit = []
@@ -329,9 +343,24 @@ async def _clock_wait():
 
 async def _named_channel(guild, key):
     raw = await database.get_setting(bot.db, f"{key}:{guild.id}")
-    if not raw:
-        return None
-    return guild.get_channel(int(raw))
+    if raw:
+        try:
+            ch = guild.get_channel(int(raw))
+            if ch:
+                return ch
+        except (TypeError, ValueError):
+            pass
+    aliases = {
+        "bloodin_channel": ("blood-in", "bloodin", "blood in"),
+        "bloodout_channel": ("bloodout", "blood-out", "blood out"),
+        "log_channel": ("log-kanal", "logs", "log"),
+    }
+    names = aliases.get(key, ())
+    for c in guild.text_channels:
+        n = c.name.lower().replace("💧", "").replace("|", " ")
+        if any(a in n for a in names):
+            return c
+    return None
 
 
 async def _delete_clip(guild, user_id):
@@ -356,8 +385,7 @@ async def on_member_join(member: discord.Member):
     ch = await _named_channel(member.guild, "bloodin_channel")
     if ch:
         await ch.send(msg)
-    else:
-        await bot.log(member.guild, msg)
+    await bot.log(member.guild, msg, "Blood-In")
 
 
 @bot.event
@@ -368,8 +396,7 @@ async def on_member_remove(member: discord.Member):
     ch = await _named_channel(member.guild, "bloodout_channel")
     if ch:
         await ch.send(msg)
-    else:
-        await bot.log(member.guild, msg)
+    await bot.log(member.guild, f"{msg} (Kanal: {ch.mention if ch else 'kein Blood-Out-Kanal gesetzt'})", "Blood-Out")
 
 
 @bot.event
@@ -428,8 +455,7 @@ async def kick_cmd(interaction: discord.Interaction, person: discord.Member):
     text = f"Das ist dein Blood-Out {person.mention}"
     if ch:
         await ch.send(text)
-    else:
-        await bot.log(interaction.guild, text)
+    await bot.log(interaction.guild, text, "Blood-Out")
     try:
         await person.kick(reason=f"Blood-Out durch {interaction.user}")
     except discord.Forbidden:
