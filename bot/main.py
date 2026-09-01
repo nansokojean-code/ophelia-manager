@@ -21,7 +21,7 @@ load_dotenv(ROOT / ".env")
 import database
 import panels
 import views
-from ranks import is_leader, is_officer, rank_names, set_areas, set_guild_roles
+from ranks import is_high, is_leader, is_officer, rank_names, set_areas, set_guild_roles
 
 
 intents = discord.Intents.default()
@@ -111,6 +111,7 @@ class ClubBot(commands.Bot):
         self.add_view(views.AbmeldungView(self))
         self.add_view(views.AbgabeView(self))
         self.add_view(views.KasseView(self))
+        self.add_view(views.SanktionPayView())
         self.add_view(views.RouteView(self))
         self.add_view(views.EinkaufView(self))
         self.add_view(views.ArbeiterView(self))
@@ -147,7 +148,7 @@ class ClubBot(commands.Bot):
         mapping = {
             "mitarbeiter": ("mitarbeiter", panels.embed_mitarbeiter(guild), None),
             "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
-            "rang": ("rang", panels.embed_rangsystem(guild), views.RangView(self)),
+            "rang": ("rang", panels.embed_rangsystem(guild), None),
             "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": ("dienst", panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": ("katalog", panels.embed_katalog(self.db), None),
@@ -199,7 +200,7 @@ class ClubBot(commands.Bot):
         builders = {
             "mitarbeiter": (panels.embed_mitarbeiter(guild), None),
             "memberliste": (panels.embed_memberliste(guild), None),
-            "rang": (panels.embed_rangsystem(guild), views.RangView(self)),
+            "rang": (panels.embed_rangsystem(guild), None),
             "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": (panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": (panels.embed_katalog(self.db), None),
@@ -648,6 +649,23 @@ async def sanktion_aufheben(interaction: discord.Interaction, person: discord.Me
     await bot.refresh_panels(interaction.guild, ["sanktionen"])
     await bot.log(interaction.guild, f"{interaction.user.mention} hat Sanktionen von {person.mention} aufgehoben.")
     await interaction.response.send_message("Sanktionen aufgehoben.", ephemeral=True)
+
+
+@bot.tree.command(name="ophelia_clean", description="Alle Nachrichten von Ophelia Manager löschen")
+async def ophelia_clean(interaction: discord.Interaction):
+    if not is_high(interaction.user):
+        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    deleted = 0
+    for ch in list(interaction.guild.text_channels) + list(interaction.guild.threads):
+        try:
+            async for msg in ch.history(limit=200):
+                if msg.author.id == bot.user.id:
+                    await msg.delete()
+                    deleted += 1
+        except discord.HTTPException:
+            continue
+    await interaction.followup.send(f"{deleted} Bot-Nachrichten gelöscht.", ephemeral=True)
 
 
 @bot.tree.command(name="arbeiter_setzen", description="Arbeiter-Daten setzen (kein Ausweis-Foto)")

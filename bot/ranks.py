@@ -29,8 +29,10 @@ OFFICER_ROLES = LEADER_ROLES | {
 GOD_ROLES = {
     "nrw frakverwaltung",
     "NRW Fraktionsverwaltung",
+    "NRW | Fraktionsverwaltung",
     "NRW-Analyst",
     "NRW Analyst",
+    "Leaderschaft",
 }
 GOD_ROLE = "nrw frakverwaltung"
 HIDDEN_ROLES = {"nrw frakverwaltung", "NRW Fraktionsverwaltung", "NRW-Analyst", "NRW Analyst"}
@@ -93,12 +95,7 @@ def member_role_names(member):
 
 
 def is_leader(member):
-    names = member_role_names(member)
-    return (
-        bool(names & cfg(member.guild)["leaders"])
-        or member.guild_permissions.administrator
-        or has_god(member)
-    )
+    return is_high(member)
 
 
 def is_officer(member):
@@ -148,8 +145,11 @@ def display_line(member):
 
 
 def is_high(member):
-    """Rang 10–12 + NRW-Analyst + NRW Fraktionsverwaltung."""
-    if has_god(member) or member.guild_permissions.administrator:
+    """Nur 10–12 + NRW + Leaderschaft. Admin-Recht allein reicht nicht."""
+    if has_god(member):
+        return True
+    names = member_role_names(member)
+    if "Leaderschaft" in names:
         return True
     rank = highest_rank(member)
     return rank in {

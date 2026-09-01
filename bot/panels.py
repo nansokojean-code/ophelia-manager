@@ -64,7 +64,9 @@ async def embed_mitarbeiter(guild):
 
 
 async def embed_memberliste(guild):
-    return await embed_rangsystem_users(guild)
+    e = await embed_rangsystem_users(guild)
+    e.title = "Memberliste"
+    return e
 
 
 async def embed_rangsystem(guild):
@@ -88,7 +90,7 @@ async def embed_rangsystem_users(guild):
         if rank:
             grouped[rank].append(m)
 
-    e = discord.Embed(title="Rangsystem", color=0x2B2D31)
+    e = discord.Embed(title="Memberliste", color=0x2B2D31)
     if not names:
         e.description = "Noch keine Rang-Rollen gesetzt. `/rangrollen` benutzen."
         e.set_footer(text=now_footer())
@@ -111,7 +113,24 @@ async def embed_aufstellung(guild, db):
 
 
 async def embed_abmeldung(guild, db):
-    return await embed_dienststatus(guild, db, title="Abmeldung", ping=False)
+    cur = await db.execute(
+        "SELECT user_id, reason, updated_at FROM attendance WHERE status = 'abgemeldet' ORDER BY updated_at DESC"
+    )
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Abmeldung", color=0x2B2D31)
+    if not rows:
+        e.description = "_keine Abmeldungen_"
+    else:
+        parts = []
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            who = display_line(m) if m else f"User {r['user_id']}"
+            parts.append(f"**{who}**")
+            parts.append(r["reason"] or "kein Grund")
+            parts.append("")
+        e.description = "\n".join(parts).strip()[:4000]
+    e.set_footer(text=now_footer())
+    return e
 
 
 async def embed_aufstellung_old(guild, db):
@@ -472,10 +491,16 @@ async def embed_pflicht():
 
 
 async def embed_routes(db):
-    cur = await db.execute("SELECT name FROM routes ORDER BY id")
-    rows = await cur.fetchall()
-    e = discord.Embed(title="Unsere Routen", color=0x2B2D31)
-    e.description = "\n".join(f"• {r['name']}" for r in rows) or "_keine Routen_"
+    try:
+        cur = await db.execute("SELECT name, amount FROM routes ORDER BY id")
+        rows = await cur.fetchall()
+        lines = [f"• **{r['name']}** — {r['amount'] or '-'}" for r in rows]
+    except Exception:
+        cur = await db.execute("SELECT name FROM routes ORDER BY id")
+        rows = await cur.fetchall()
+        lines = [f"• {r['name']}" for r in rows]
+    e = discord.Embed(title="Unsere Route", color=0x2B2D31)
+    e.description = "\n".join(lines) or "_keine Route_"
     e.set_footer(text=now_footer("Website"))
     return e
 

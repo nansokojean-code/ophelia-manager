@@ -63,12 +63,49 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
             (uid, str(self.kind), str(self.grund), str(self.dauer) or None, interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
+        cur = await self.bot.db.execute("SELECT last_insert_rowid() AS i")
+        sid = (await cur.fetchone())["i"]
+        e = discord.Embed(title="Sanktion", color=0xC0392B)
+        e.description = (
+            f"**Wer:** {self.person.mention}\n"
+            f"**Regel:** {self.kind}\n"
+            f"**Wie viel:** {self.grund}\n"
+            f"**Bis:** {self.dauer or '-'}"
+        )
+        e.set_footer(text=f"SID:{sid}")
+        await interaction.channel.send(embed=e, view=SanktionPayView())
         await self.bot.log(
             interaction.guild,
             f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.kind} – {self.grund}",
+            "Sanktionen",
         )
-        await interaction.response.send_message(f"Sanktion für {self.person.mention}.", ephemeral=True)
+        await interaction.response.send_message(f"Sanktion für {self.person.mention} gepostet.", ephemeral=True)
+
+
+class SanktionPayView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
+    async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
+        sid = None
+        if interaction.message.embeds:
+            foot = interaction.message.embeds[0].footer.text or ""
+            if "SID:" in foot:
+                try:
+                    sid = int(foot.split("SID:")[1].split()[0])
+                except ValueError:
+                    sid = None
+        if sid:
+            await interaction.client.db.execute("UPDATE sanctions SET active = 0 WHERE id = ?", (sid,))
+            await interaction.client.db.commit()
+        try:
+            await interaction.message.delete()
+        except discord.HTTPException:
+            pass
+        await interaction.response.send_message("Sanktion als bezahlt gelöscht.", ephemeral=True)
 
 
 class WarnModal(discord.ui.Modal, title="Verwarnung"):
@@ -111,7 +148,7 @@ class LagerModal(discord.ui.Modal):
         self.direction = direction
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_staff(interaction.user):
+        if interaction.user.bot:
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         try:
             qty = int(str(self.menge).strip())
@@ -390,12 +427,14 @@ class LagerView(discord.ui.View):
 
     @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="lager:new")
     async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
         await interaction.response.send_modal(LagerNeuModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="lager:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, ["lager"])
         await interaction.response.send_message("Lager aktualisiert.", ephemeral=True)
 
@@ -449,7 +488,7 @@ class UrlaubView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
-    @discord.ui.button(label="Beantragen", style=discord.ButtonStyle.primary, custom_id="urlaub:add")
+    @discord.ui.button(label="Urlaub", style=discord.ButtonStyle.primary, custom_id="urlaub:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(UrlaubModal(self.bot))
 
@@ -741,8 +780,8 @@ class BlacklistView(discord.ui.View):
 
     @discord.ui.button(label="Blacklist", style=discord.ButtonStyle.danger, custom_id="bl:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not can_blacklist(interaction.user):
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
         await interaction.response.send_modal(BlacklistModal(self.bot))
 
     @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.secondary, custom_id="bl:del")
@@ -787,6 +826,18 @@ class ClipAntragView(discord.ui.View):
     @discord.ui.button(label="Kill-Clip beantragen", style=discord.ButtonStyle.primary, custom_id="clip:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
         from rules_data import CLIP_RULES
+        cur = await self.bot.db.execute(
+            "SELECT channel_id FROM clip_channels WHERE user_id = ?",
+            (interaction.user.id,),
+        )
+        row = await cur.fetchone()
+        if row and not is_high(interaction.user):
+            ch = interaction.guild.get_channel(row["channel_id"])
+            if ch:
+                return await interaction.response.send_message(
+                    f"Du hast schon einen Clip-Kanal: {ch.mention}", ephemeral=True
+                )
+            return await interaction.response.send_message("Nur 1 Clip-Kanal. Leadership darf mehrere.", ephemeral=True)
         cat = None
         for c in interaction.guild.categories:
             if c.name.lower() in {"kill-logs", "kill logs", "killlogs"}:
@@ -895,6 +946,7 @@ class KasseView(discord.ui.View):
 class RouteModal(discord.ui.Modal, title="Route eintragen"):
     name = discord.ui.TextInput(label="Welche Route", required=True, max_length=80)
     menge = discord.ui.TextInput(label="Menge / Abgabe", required=True, max_length=40)
+    bis = discord.ui.TextInput(label="Abgeben bis wann", required=True, max_length=40)
 
     def __init__(self, bot):
         super().__init__()
@@ -906,7 +958,7 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
         try:
             await self.bot.db.execute(
                 "INSERT INTO routes(name, amount) VALUES(?, ?)",
-                (str(self.name).strip(), str(self.menge).strip()),
+                (str(self.name).strip(), f"{self.menge} | bis {self.bis}"),
             )
         except Exception:
             await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (f"{self.name} — {self.menge}",))
@@ -1001,10 +1053,8 @@ class ArbeiterModal(discord.ui.Modal, title="Arbeiter eintragen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / Frak.", ephemeral=True)
         await interaction.response.send_message(
-            "Jetzt in **diesen Kanal das Bild** schicken (Datei vom PC). 60 Sekunden Zeit.",
+            "Jetzt in **diesen Kanal das Bild** schicken (Datei vom PC). 10 Minuten Zeit.",
             ephemeral=True,
         )
 
@@ -1017,7 +1067,7 @@ class ArbeiterModal(discord.ui.Modal, title="Arbeiter eintragen"):
 
         file = None
         try:
-            msg = await self.bot.wait_for("message", timeout=45, check=check)
+            msg = await self.bot.wait_for("message", timeout=600, check=check)
             att = msg.attachments[0]
             file = await att.to_file()
             try:
@@ -1035,6 +1085,18 @@ class ArbeiterModal(discord.ui.Modal, title="Arbeiter eintragen"):
         await interaction.channel.send(**kwargs)
 
 
+class ArbeiterDelModal(discord.ui.Modal, title="Arbeiter rausnehmen"):
+    name = discord.ui.TextInput(label="Name genau", required=True, max_length=80)
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.channel.send(f"**Arbeiter raus:** {self.name} (von {interaction.user.mention})")
+        await interaction.response.send_message("Rausgenommen (Nachricht gepostet).", ephemeral=True)
+
+
 class ArbeiterView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
@@ -1042,6 +1104,8 @@ class ArbeiterView(discord.ui.View):
 
     @discord.ui.button(label="Arbeiter eintragen", style=discord.ButtonStyle.primary, custom_id="arb:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / Frak.", ephemeral=True)
         await interaction.response.send_modal(ArbeiterModal(self.bot))
+
+    @discord.ui.button(label="Arbeiter rausnehmen", style=discord.ButtonStyle.danger, custom_id="arb:del")
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(ArbeiterDelModal(self.bot))
