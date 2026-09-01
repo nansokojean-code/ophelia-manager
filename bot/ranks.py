@@ -35,7 +35,13 @@ GOD_ROLES = {
     "Leaderschaft",
 }
 GOD_ROLE = "nrw frakverwaltung"
-HIDDEN_ROLES = {"nrw frakverwaltung", "NRW Fraktionsverwaltung", "NRW-Analyst", "NRW Analyst"}
+HIDDEN_ROLES = {
+    "nrw frakverwaltung",
+    "NRW Fraktionsverwaltung",
+    "NRW | Fraktionsverwaltung",
+    "NRW-Analyst",
+    "NRW Analyst",
+}
 
 
 def _norm(name):
@@ -92,6 +98,10 @@ def rank_names(guild):
 
 def member_role_names(member):
     return {r.name for r in member.roles}
+
+
+def can_route(member):
+    return is_high(member) or highest_rank(member) == "Rang 9 – Capo"
 
 
 def is_leader(member):

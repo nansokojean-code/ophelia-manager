@@ -236,7 +236,8 @@ class ClubBot(commands.Bot):
             msg = await channel.send(**kwargs)
         else:
             embed = await embed_coro
-            msg = await channel.send(embed=embed, view=view)
+            heading = embed.title or key
+            msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 
@@ -334,7 +335,14 @@ async def daily_clock():
             await bot.db.commit()
             if hit:
                 await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
-                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]))
+                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]), "Sanktionen")
+                prow = await database.get_panel(bot.db, f"{g.id}:sanktionen")
+                sch = g.get_channel(prow["channel_id"]) if prow else discord.utils.find(lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(), g.text_channels)
+                if sch:
+                    for m in hit:
+                        e = discord.Embed(title="SANKTION 50k", color=0xC0392B)
+                        e.description = f"**Wer:** {m.mention}\n**Regel:** REGEL 2\n**Grund:** nicht angemeldet / nicht abgemeldet\n**Höhe:** 50k"
+                        await sch.send(content=f"# Sanktion\n{m.mention} — 50k", embed=e)
 
 
 @daily_clock.before_loop

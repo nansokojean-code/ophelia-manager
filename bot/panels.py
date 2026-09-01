@@ -97,7 +97,7 @@ async def embed_rangsystem_users(guild):
         return e
     parts = []
     for i, rank in enumerate(names):
-        hint = "Leitung" if i == 0 else ("Teamleitung" if i == 1 else "Mitarbeiter")
+        hint = ""
         people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
         parts.append(f"**{rank} ({len(people)}) {hint}**")
         if people:
@@ -465,7 +465,7 @@ async def embed_blacklist(db):
     rows = await cur.fetchall()
     e = discord.Embed(title="Blacklist", color=0x2B2D31)
     e.description = "\n".join(f"• {r['name']}  ·  {r['created_at']}" for r in rows) or "_leer_"
-    e.set_footer(text=now_footer("nur Rang 12–9"))
+    e.set_footer(text=now_footer("Nur Leadership kann das ausführen"))
     return e
 
 
@@ -554,7 +554,7 @@ async def embed_rollenanfrage():
     e = discord.Embed(title="Rollen-Anfrage", color=0x3B82C4)
     e.description = (
         "Neu auf dem Server? Button **Rolle anfragen**.\n"
-        "Leadership (Rang 12–9) vergibt danach die Rolle."
+        "Leadership vergibt danach die Rolle."
     )
     e.set_footer(text=now_footer())
     return e
