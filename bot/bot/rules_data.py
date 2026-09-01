@@ -37,7 +37,7 @@ RANK_INFO = [
     ("Rang 7 – Enforcer", "Erfahrenes Mitglied, sorgt für Ordnung und Disziplin innerhalb der Familie (Caller)."),
     ("Rang 6 – Made Member", "Vollwertiges und anerkanntes Mitglied."),
     ("Rang 5 – Soldier", "Aktives Mitglied, das sich bereits bewiesen hat."),
-    ("Rang 4 – Prospect", "Anwärter der Leadership."),
+    ("Rang 4 – Prospect", "Anwärter der Liederschaft."),
     ("Rang 3 – Recruit", "Muss sich noch beweisen."),
     ("Rang 2 – Runner", "Hilft der Familie und sammelt erste Erfahrungen."),
     ("Rang 1 – Associate", "Anfänger (auf Probe)."),

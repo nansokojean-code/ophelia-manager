@@ -103,7 +103,15 @@ def is_officer(member):
 def is_staff(member):
     names = member_role_names(member)
     ranks = set(rank_names(member.guild))
-    return bool(names & ranks) or member.guild_permissions.administrator
+    return bool(names & ranks) or member.guild_permissions.administrator or has_god(member)
+
+
+def can_manage(member):
+    return is_leader(member)
+
+
+def can_blacklist(member):
+    return not member.bot
 
 
 def highest_rank(member):
