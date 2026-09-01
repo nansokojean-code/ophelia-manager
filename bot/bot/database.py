@@ -213,6 +213,10 @@ async def init(db: aiosqlite.Connection):
                 "Hier stehen Infos, die auf der Website eingetragen werden. Leitung kann Texte anlegen, ändern und löschen. Der Discord-Bot übernimmt sie in die Info-Liste.",
             ),
         )
+    try:
+        await db.execute("ALTER TABLE routes ADD COLUMN amount TEXT DEFAULT ''")
+    except Exception:
+        pass
     await db.commit()
 
 

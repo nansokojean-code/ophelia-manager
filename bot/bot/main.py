@@ -126,9 +126,20 @@ class ClubBot(commands.Bot):
             ch = discord.utils.find(lambda c: "log" in c.name.lower(), guild.text_channels)
         if not ch:
             return
-        e = discord.Embed(title=f"Log · {kategorie}", description=text, color=0x3B82C4)
+        e = discord.Embed(title=kategorie, description=text, color=0x3B82C4)
+        thread = None
         try:
-            await ch.send(embed=e)
+            for t in getattr(ch, "threads", []):
+                if t.name.lower() == str(kategorie).lower():
+                    thread = t
+                    break
+            if thread is None:
+                starter = await ch.send(f"**Kategorie: {kategorie}**")
+                thread = await starter.create_thread(name=str(kategorie)[:90])
+        except discord.HTTPException:
+            thread = None
+        try:
+            await (thread or ch).send(embed=e)
         except discord.HTTPException:
             pass
 

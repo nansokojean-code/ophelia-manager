@@ -19,7 +19,6 @@ LEADER_ROLES = {
     "Rang 12 – OG",
     "Rang 11 – Consigliere",
     "Rang 10 – Don",
-    "Rang 9 – Capo",
 }
 
 OFFICER_ROLES = LEADER_ROLES | {
@@ -27,8 +26,14 @@ OFFICER_ROLES = LEADER_ROLES | {
     "Rang 8 – Lieutenant",
 }
 
+GOD_ROLES = {
+    "nrw frakverwaltung",
+    "NRW Fraktionsverwaltung",
+    "NRW-Analyst",
+    "NRW Analyst",
+}
 GOD_ROLE = "nrw frakverwaltung"
-HIDDEN_ROLES = {"nrw frakverwaltung"}
+HIDDEN_ROLES = {"nrw frakverwaltung", "NRW Fraktionsverwaltung", "NRW-Analyst", "NRW Analyst"}
 
 
 def _norm(name):
@@ -36,7 +41,8 @@ def _norm(name):
 
 
 def has_god(member):
-    return any(_norm(r.name) == _norm(GOD_ROLE) for r in member.roles)
+    names = {_norm(r.name) for r in member.roles}
+    return bool(names & {_norm(x) for x in GOD_ROLES})
 
 
 def hidden_from_lists(member):
@@ -138,4 +144,16 @@ def status_dot(member):
 
 def display_line(member):
     nick = member.nick or member.display_name
-    return f"{status_dot(member)} {member.mention} | {nick}"
+    return f"{member.mention} | {nick}"
+
+
+def is_high(member):
+    """Rang 10–12 + NRW-Analyst + NRW Fraktionsverwaltung."""
+    if has_god(member) or member.guild_permissions.administrator:
+        return True
+    rank = highest_rank(member)
+    return rank in {
+        "Rang 12 – OG",
+        "Rang 11 – Consigliere",
+        "Rang 10 – Don",
+    }
