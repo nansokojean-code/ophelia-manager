@@ -62,6 +62,93 @@ def fancy_name(text: str) -> str:
     return result
 
 
+
+def find_guild_role(guild, chosen: str):
+    """Rolle auf dem Server finden – tolerant bei Leerzeichen/Doppelpunkt."""
+    import re
+    import unicodedata
+    if not chosen or not guild:
+        return None
+
+    def norm(s):
+        s = unicodedata.normalize("NFKC", str(s or ""))
+        s = s.replace("：", ":").replace("｜", "|")
+        s = re.sub(r"\s+", " ", s).strip().lower()
+        return s
+
+    target = norm(chosen)
+    # 1) exakt
+    role = discord.utils.get(guild.roles, name=chosen)
+    if role:
+        return role
+    # 2) normalisiert gleich
+    for r in guild.roles:
+        if norm(r.name) == target:
+            return r
+    # 3) "Rang 11" / "rang11" / "11er"
+    m = re.search(r"rang\s*(\d+)", target)
+    if m:
+        num = m.group(1)
+        for r in guild.roles:
+            rn = norm(r.name)
+            if re.search(rf"rang\s*{num}\b", rn) or re.search(rf"\b{num}er\b", rn):
+                return r
+    # 4) bekannte Namen ohne Nummer
+    aliases = {
+        "lieutenant": ("lieutenant", "8er"),
+        "enforcer": ("enforcer", "7er"),
+        "made member": ("made member", "6er"),
+        "soldier": ("soldier", "5er"),
+        "prospect": ("prospect", "4er"),
+        "recruit": ("recruit", "3er"),
+        "runner": ("runner", "2er"),
+        "associate": ("associate", "1er"),
+        "leaderschaft": ("leaderschaft",),
+        "it": ("it",),
+    }
+    for key, keys in aliases.items():
+        if any(k in target for k in keys) or key in target:
+            for r in guild.roles:
+                rn = norm(r.name)
+                if any(k in rn for k in keys):
+                    return r
+    # 5) Teilstring
+    for r in guild.roles:
+        rn = norm(r.name)
+        if target and (target in rn or rn in target):
+            return r
+    return None
+
+
+def guild_rank_options(guild):
+    """Select-Optionen aus echten Server-Rollen (Rang 12 → 1)."""
+    from ranks import RANK_ROLE_NAMES, rank_names
+    wanted = list(rank_names(guild) if guild else RANK_ROLE_NAMES) or list(RANK_ROLE_NAMES)
+    opts = []
+    used = set()
+    # zuerst konfigurierte Namen, gematcht auf echte Rollen
+    for name in wanted:
+        role = find_guild_role(guild, name) if guild else None
+        label = role.name if role else name
+        if label in used:
+            continue
+        used.add(label)
+        opts.append(discord.SelectOption(label=label[:100], value=label[:100]))
+    if opts:
+        return opts[:25]
+    # Fallback: alle Rollen die nach Rang aussehen
+    if guild:
+        scored = []
+        for r in guild.roles:
+            n = r.name.lower()
+            if any(x in n for x in ("rang", "lieutenant", "enforcer", "made member", "soldier", "prospect", "recruit", "runner", "associate", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er")):
+                scored.append(r.name)
+        for label in scored[:25]:
+            if label not in used:
+                opts.append(discord.SelectOption(label=label[:100], value=label[:100]))
+    return opts or [discord.SelectOption(label="keine Ränge gefunden", value="none")]
+
+
 async def lead_repost(interaction, bot, key):
     if not is_high(interaction.user):
         return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
@@ -994,15 +1081,22 @@ class BlacklistView(discord.ui.View):
 
 
 class RoleConfirmView(discord.ui.View):
-    def __init__(self, rank_list=None):
+    def __init__(self, rank_list=None, guild=None):
         super().__init__(timeout=None)
-        from ranks import RANK_ROLE_NAMES
-        names = list(rank_list) if rank_list else list(RANK_ROLE_NAMES)
-        names = [n for n in names if n][:25]
-        opts = [discord.SelectOption(label=n[:100], value=n) for n in names]
-        if not opts:
-            opts = [discord.SelectOption(label="keine Ränge", value="none")]
-        sel = discord.ui.Select(placeholder="Rolle wählen → wird sofort vergeben", custom_id="role:reqpick", options=opts)
+        if guild is not None:
+            opts = guild_rank_options(guild)
+        else:
+            from ranks import RANK_ROLE_NAMES
+            names = list(rank_list) if rank_list else list(RANK_ROLE_NAMES)
+            names = [n for n in names if n][:25]
+            opts = [discord.SelectOption(label=n[:100], value=n[:100]) for n in names]
+            if not opts:
+                opts = [discord.SelectOption(label="keine Ränge", value="none")]
+        sel = discord.ui.Select(
+            placeholder="Rolle wählen → wird sofort vergeben",
+            custom_id="role:reqpick",
+            options=opts,
+        )
         sel.callback = self._picked
         self.add_item(sel)
 
@@ -1026,25 +1120,19 @@ class RoleConfirmView(discord.ui.View):
             return await interaction.response.send_message("User-ID fehlt in der Anfrage.", ephemeral=True)
         member = interaction.guild.get_member(uid)
         if not member:
-            return await interaction.response.send_message("User nicht gefunden (nicht mehr auf dem Server?).", ephemeral=True)
-
-        role = discord.utils.get(interaction.guild.roles, name=chosen)
-        if role is None:
-            low = chosen.lower().strip()
-            for r in interaction.guild.roles:
-                if r.name.lower().strip() == low:
-                    role = r
-                    break
-        if role is None:
-            low = chosen.lower().strip()
-            for r in interaction.guild.roles:
-                rn = r.name.lower()
-                if low in rn or rn in low:
-                    role = r
-                    break
-        if role is None:
             return await interaction.response.send_message(
-                f"Rolle `{chosen}` nicht gefunden. Name muss zur Discord-Rolle passen.",
+                "User nicht gefunden (nicht mehr auf dem Server?).", ephemeral=True
+            )
+
+        role = find_guild_role(interaction.guild, chosen)
+        if role is None:
+            # letzte Chance: Liste der Rang-Rollen zeigen
+            sample = ", ".join(
+                r.name for r in interaction.guild.roles
+                if "rang" in r.name.lower() or any(x in r.name.lower() for x in ("8er", "7er", "lieutenant", "associate"))
+            )[:200]
+            return await interaction.response.send_message(
+                f"Rolle `{chosen}` nicht gefunden.\nServer-Rollen z.B.: {sample or '—'}",
                 ephemeral=True,
             )
 
@@ -1056,21 +1144,25 @@ class RoleConfirmView(discord.ui.View):
                 continue
             if r.name in allowed:
                 to_remove.append(r)
-            else:
-                rn = r.name.lower()
-                if any(k in rn for k in (
-                    "rang ", "rang:", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er",
-                    "lieutenant", "enforcer", "prospect", "recruit", "runner", "associate",
-                    "soldier", "made member",
-                )):
-                    to_remove.append(r)
+                continue
+            rn = r.name.lower()
+            if any(
+                k in rn
+                for k in (
+                    "rang", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er",
+                    "lieutenant", "enforcer", "prospect", "recruit", "runner",
+                    "associate", "soldier", "made member",
+                )
+            ):
+                to_remove.append(r)
         try:
             if to_remove:
                 await member.remove_roles(*to_remove, reason=f"Rollenwechsel durch {interaction.user}")
             await member.add_roles(role, reason=f"Rollenanfrage durch {interaction.user}")
         except discord.Forbidden:
             return await interaction.response.send_message(
-                "Bot darf die Rolle nicht geben. Bot-Rolle muss **über** den Rang-Rollen stehen.",
+                "Bot darf die Rolle nicht geben. Bot-Rolle muss **über** den Rang-Rollen stehen "
+                f"(Bot unter der Rolle **{role.name}**?).",
                 ephemeral=True,
             )
         except discord.HTTPException as exc:
@@ -1122,7 +1214,7 @@ class RolleBestaetigenPanelView(discord.ui.View):
         await interaction.channel.send(
             content=f"# Rollenanfrage\n{person.mention}",
             embed=e,
-            view=RoleConfirmView(rank_names(interaction.guild) if interaction.guild else None),
+            view=RoleConfirmView(guild=interaction.guild),
         )
         await interaction.response.send_message("Unten Rolle wählen, dann Bestätigen.", ephemeral=True)
 
@@ -1171,7 +1263,7 @@ class RolleAnfrageView(discord.ui.View):
         await ziel.send(
             content=f"# Rollenanfrage\n{ping_leaderschaft(interaction.guild)}",
             embed=e,
-            view=RoleConfirmView(rank_names(interaction.guild) if interaction.guild else None),
+            view=RoleConfirmView(guild=interaction.guild),
         )
         await interaction.response.send_message(f"Anfrage ist in {ziel.mention}.", ephemeral=True)
 
