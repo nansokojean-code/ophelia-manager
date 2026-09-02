@@ -140,14 +140,14 @@ def highest_rank(member):
         ("Rang 11:", ("rang 11",)),
         ("Rang 10:", ("rang 10",)),
         ("Rang 9:", ("rang 9",)),
-        ("Lieutenant (8er)", ("8er", "lieutenant")),
-        ("Enforcer (7er)", ("7er", "enforcer")),
-        ("Made Member (6er)", ("6er", "made member")),
-        ("Soldier (5er)", ("5er", "soldier")),
-        ("Prospect (4er)", ("4er", "prospect")),
-        ("Recruit (3er)", ("3er", "recruit")),
-        ("Runner (2er)", ("2er", "runner")),
-        ("Associate (1er)", ("1er", "associate")),
+        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant")),
+        ("Enforcer (7er)", ("rang 7", "7er", "enforcer")),
+        ("Made Member (6er)", ("rang 6", "6er", "made member")),
+        ("Soldier (5er)", ("rang 5", "5er", "soldier")),
+        ("Prospect (4er)", ("rang 4", "4er", "prospect")),
+        ("Recruit (3er)", ("rang 3", "3er", "recruit")),
+        ("Runner (2er)", ("rang 2", "2er", "runner")),
+        ("Associate (1er)", ("rang 1", "1er", "associate")),
     ]
     for official, keys in aliases:
         for n in low:
