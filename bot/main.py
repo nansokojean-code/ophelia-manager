@@ -107,6 +107,7 @@ class ClubBot(commands.Bot):
         self.add_view(views.BlacklistView(self))
         self.add_view(views.RolleAnfrageView(self))
         self.add_view(views.RoleConfirmView())
+        self.add_view(views.RolleBestaetigenPanelView(self))
         self.add_view(views.ClipAntragView(self))
         self.add_view(views.LootView(self))
         self.add_view(views.RouteCheckView(self))
@@ -172,7 +173,7 @@ class ClubBot(commands.Bot):
             "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "rollenbestaetigen": ("rollenbestaetigen", panels.embed_rollenbestaetigen(), None),
+            "rollenbestaetigen": ("rollenbestaetigen", panels.embed_rollenbestaetigen(), views.RolleBestaetigenPanelView(self)),
             "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
             "abgaben": ("abgaben", panels.embed_abgaben(self.db), views.AbgabeView(self)),
             "kasse": ("kasse", panels.embed_kasse(self.db), views.KasseView(self)),
@@ -225,7 +226,7 @@ class ClubBot(commands.Bot):
             "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "rollenbestaetigen": (panels.embed_rollenbestaetigen(), None),
+            "rollenbestaetigen": (panels.embed_rollenbestaetigen(), views.RolleBestaetigenPanelView(self)),
             "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
             "abgaben": (panels.embed_abgaben(self.db), views.AbgabeView(self)),
             "kasse": (panels.embed_kasse(self.db), views.KasseView(self)),

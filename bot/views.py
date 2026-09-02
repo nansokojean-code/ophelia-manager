@@ -908,7 +908,29 @@ class RoleConfirmView(discord.ui.View):
         await interaction.response.send_message("Rolle vergeben.", ephemeral=True)
 
 
+class RolleBestaetigenPanelView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="User wählen (Leadership)", custom_id="role:confwho")
+    async def who(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        person = select.values[0]
+        e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
+        e.description = f"# {person.mention}\n**{person.display_name}**"
+        e.set_footer(text=f"UID:{person.id}")
+        await interaction.channel.send(
+            content=f"# Rollenanfrage\n{person.mention}",
+            embed=e,
+            view=RoleConfirmView(),
+        )
+        await interaction.response.send_message("Unten Rolle wählen, dann Bestätigen.", ephemeral=True)
+
+
 class RolleAnfrageView(discord.ui.View):
+
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
