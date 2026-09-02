@@ -332,33 +332,22 @@ async def embed_lager(db):
 
 async def embed_urlaub(guild, db):
     cur = await db.execute(
-        "SELECT user_id, start, end, reason, status FROM vacations ORDER BY id DESC LIMIT 30"
+        "SELECT user_id, start, end, reason FROM vacations ORDER BY id DESC LIMIT 30"
     )
     rows = await cur.fetchall()
-    buckets = defaultdict(list)
-    for r in rows:
-        buckets[r["status"]].append(r)
-
-    def name(uid):
-        m = guild.get_member(uid)
-        return display_line(m) if m else f"`{uid}`"
-
     e = discord.Embed(title="Urlaub", color=0x2B2D31)
-    parts = []
-    for title, key in (
-        ("Beantragt", "beantragt"),
-        ("Genehmigt / Aktiv", "genehmigt"),
-        ("Abgelehnt", "abgelehnt"),
-    ):
-        items = buckets.get(key, [])
-        parts.append(f"**{title} ({len(items)})**")
-        if items:
-            for r in items:
-                parts.append(f"{name(r['user_id'])} | {r['start']} – {r['end']} | {r['reason']}")
-        else:
-            parts.append("_niemand_")
-        parts.append("")
-    e.description = "\n".join(parts).strip()
+    if not rows:
+        e.description = "**Eingetragen**\n\nnicht vorhanden"
+    else:
+        lines = [f"**Eingetragen ({len(rows)})**", ""]
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            who = display_line(m) if m else f"User {r['user_id']}"
+            lines.append(f"**{who}**")
+            lines.append(f"{r['start']} – {r['end']}")
+            lines.append(f"{r['reason']}")
+            lines.append("")
+        e.description = "\n".join(lines).strip()[:4000]
     e.set_footer(text=now_footer())
     return e
 

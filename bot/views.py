@@ -342,7 +342,7 @@ class EquipModal(discord.ui.Modal, title="Ausrüstung setzen"):
         await interaction.response.send_message("Ausrüstung aktualisiert.", ephemeral=True)
 
 
-class UrlaubModal(discord.ui.Modal, title="Urlaub beantragen"):
+class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
     start = discord.ui.TextInput(label="Von (z.B. 01.09.2026)", required=True, max_length=20)
     ende = discord.ui.TextInput(label="Bis (z.B. 10.09.2026)", required=True, max_length=20)
     grund = discord.ui.TextInput(label="Begründung", style=discord.TextStyle.paragraph, required=True, max_length=300)
@@ -357,7 +357,7 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub beantragen"):
             (interaction.user.id, str(self.start), str(self.ende), str(self.grund), stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["urlaub"])
+        await self.bot.repost_panel(interaction.guild, "urlaub")
         await self.bot.log(
             interaction.guild,
             f"{interaction.user.mention} Urlaub {self.start} – {self.ende}: {self.grund}",
