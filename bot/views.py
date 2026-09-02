@@ -967,10 +967,25 @@ class RolleAnfrageView(discord.ui.View):
             return await interaction.response.send_message(
                 "Kanal `#rollen-anfrage-bestätigen` fehlt.", ephemeral=True
             )
+        uid = str(interaction.user.id)
+        try:
+            async for old in ziel.history(limit=8):
+                if old.author.id != interaction.client.user.id:
+                    continue
+                if old.embeds and old.embeds[0].footer and uid in (old.embeds[0].footer.text or ""):
+                    return await interaction.response.send_message(
+                        f"Anfrage steht schon in {ziel.mention}.", ephemeral=True
+                    )
+        except discord.HTTPException:
+            pass
         e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
-        e.description = f"# {interaction.user.mention}\n**{interaction.user.display_name}** will eine Rolle."
+        e.description = f"{interaction.user.mention}\n**{interaction.user.display_name}** will eine Rolle."
         e.set_footer(text=f"UID:{interaction.user.id}")
-        await ziel.send(content=f"# Rollenanfrage\n{ping_leaderschaft(interaction.guild)}", embed=e, view=RoleConfirmView())
+        await ziel.send(
+            content=f"# Rollenanfrage\n{ping_leaderschaft(interaction.guild)}",
+            embed=e,
+            view=RoleConfirmView(),
+        )
         await interaction.response.send_message(f"Anfrage ist in {ziel.mention}.", ephemeral=True)
 
 
