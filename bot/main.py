@@ -308,9 +308,24 @@ async def daily_clock():
             await bot.db.execute("DELETE FROM attendance")
             await bot.db.commit()
             await bot.repost_panel(g, "aufstellung")
-            await bot.log(g, "00:00 neue Aufstellung.")
+            await bot.log(g, "00:00 neue Aufstellung.", "Aufstellung")
+        last_akt = await database.get_setting(bot.db, "last_aktivitaet_date", "")
+        day = now.strftime("%Y-%m-%d")
+        if last_akt:
+            from datetime import date as _date
+            try:
+                prev = _date.fromisoformat(last_akt)
+                delta = (_date.fromisoformat(day) - prev).days
+            except ValueError:
+                delta = 99
+        else:
+            delta = 99
+        if delta >= 4:
+            for g in bot.guilds:
+                await bot.repost_panel(g, "aktivitaet")
+            await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
-        from panels import visible_members
+        from panels import staff_members
         for g in bot.guilds:
             cur = await bot.db.execute("SELECT user_id, status FROM attendance")
             rows = {r["user_id"]: r["status"] for r in await cur.fetchall()}
@@ -319,7 +334,7 @@ async def daily_clock():
             )
             vac = {r["user_id"] for r in await cur.fetchall()}
             hit = []
-            for m in visible_members(g):
+            for m in staff_members(g):
                 if m.id in vac:
                     continue
                 st = rows.get(m.id, "offen")

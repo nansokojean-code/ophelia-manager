@@ -700,15 +700,18 @@ class BlacklistModal(discord.ui.Modal, title="Blacklist"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not can_blacklist(interaction.user):
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO blacklist(name, by_id, created_at) VALUES(?, ?, ?)",
             (str(self.name).strip(), interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["blacklist"])
-        await interaction.response.send_message(f"**{self.name}** steht auf der Blacklist.", ephemeral=True)
+        e = discord.Embed(title="Blacklist", color=0xC0392B)
+        e.description = f"# {self.name}\nEingetragen von {interaction.user.mention}"
+        e.set_footer(text=stamp())
+        await interaction.channel.send(content=f"# Blacklist\n**{self.name}**", embed=e)
+        await interaction.response.send_message(f"**{self.name}** als Nachricht eingetragen.", ephemeral=True)
 
 
 class BlacklistDelModal(discord.ui.Modal, title="Von Blacklist nehmen"):
@@ -912,9 +915,13 @@ class RolleAnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Rolle anfragen", style=discord.ButtonStyle.primary, custom_id="role:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
+        def _nm(c):
+            n = c.name.lower()
+            for a, b in (("ä", "a"), ("ö", "o"), ("ü", "u"), ("ß", "ss"), ("︱", "|"), ("✅", ""), ("🎭", "")):
+                n = n.replace(a, b)
+            return n
         ziel = discord.utils.find(
-            lambda c: "rollen-anfrage-bestätigen" in c.name.lower()
-            or ("rollen" in c.name.lower() and "bestätig" in c.name.lower()),
+            lambda c: "bestatig" in _nm(c) or ("rollen" in _nm(c) and "anfrage" in _nm(c) and "bestat" in _nm(c)),
             interaction.guild.text_channels,
         )
         if not ziel:
@@ -925,8 +932,7 @@ class RolleAnfrageView(discord.ui.View):
         e.description = f"# {interaction.user.mention}\n**{interaction.user.display_name}** will eine Rolle."
         e.set_footer(text=f"UID:{interaction.user.id}")
         await ziel.send(content=f"# Rollenanfrage\n{interaction.user.mention}", embed=e, view=RoleConfirmView())
-        await self.bot.log(interaction.guild, f"{interaction.user.mention} fragt eine Rolle an.", "Rollenanfrage")
-        await interaction.response.send_message("Anfrage ist in `#rollen-anfrage-bestätigen`.", ephemeral=True)
+        await interaction.response.send_message(f"Anfrage ist in {ziel.mention}.", ephemeral=True)
 
 
 class ClipAntragView(discord.ui.View):
