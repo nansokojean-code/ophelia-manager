@@ -138,28 +138,43 @@ def can_blacklist(member):
 
 
 def highest_rank(member):
+    """Hoechster Rang (12 -> 1). Nur Leute mit einem dieser Raenge stehen in der Aufstellung."""
     names = member_role_names(member)
-    for rank in rank_names(member.guild):
+    configured = rank_names(member.guild)
+    for rank in configured:
         if rank in names:
             return rank
+    low_map = {n.lower().strip(): n for n in names}
+    for rank in configured:
+        rl = rank.lower().strip()
+        if rl in low_map:
+            return rank
+        for ln in low_map:
+            if rl and (rl in ln or ln in rl):
+                return rank
     low = {n.lower() for n in names}
     aliases = [
-        ("Rang 12:", ("rang 12",)),
-        ("Rang 11:", ("rang 11",)),
-        ("Rang 10:", ("rang 10",)),
-        ("Rang 9:", ("rang 9",)),
-        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant")),
-        ("Enforcer (7er)", ("rang 7", "7er", "enforcer")),
-        ("Made Member (6er)", ("rang 6", "6er", "made member")),
-        ("Soldier (5er)", ("rang 5", "5er", "soldier")),
-        ("Prospect (4er)", ("rang 4", "4er", "prospect")),
-        ("Recruit (3er)", ("rang 3", "3er", "recruit")),
-        ("Runner (2er)", ("rang 2", "2er", "runner")),
-        ("Associate (1er)", ("rang 1", "1er", "associate")),
+        ("Rang 12:", ("rang 12", "r12", "12er")),
+        ("Rang 11:", ("rang 11", "r11", "11er")),
+        ("Rang 10:", ("rang 10", "r10", "10er")),
+        ("Rang 9:", ("rang 9", "r9", "9er")),
+        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant", "r8")),
+        ("Enforcer (7er)", ("rang 7", "7er", "enforcer", "r7")),
+        ("Made Member (6er)", ("rang 6", "6er", "made member", "r6")),
+        ("Soldier (5er)", ("rang 5", "5er", "soldier", "r5")),
+        ("Prospect (4er)", ("rang 4", "4er", "prospect", "r4")),
+        ("Recruit (3er)", ("rang 3", "3er", "recruit", "r3")),
+        ("Runner (2er)", ("rang 2", "2er", "runner", "r2")),
+        ("Associate (1er)", ("rang 1", "1er", "associate", "r1")),
     ]
     for official, keys in aliases:
         for n in low:
             if any(k in n for k in keys):
+                if official in configured or not configured:
+                    return official
+                for rank in configured:
+                    if any(k in rank.lower() for k in keys):
+                        return rank
                 return official
     return None
 

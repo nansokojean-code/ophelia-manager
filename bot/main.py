@@ -182,6 +182,8 @@ class ClubBot(commands.Bot):
         for name in targets:
             if name == "aktivitaet":
                 continue
+            if name not in mapping:
+                continue
             key, embed_coro, view = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
             if not row:
@@ -191,13 +193,22 @@ class ClubBot(commands.Bot):
                 continue
             try:
                 msg = await ch.fetch_message(row["message_id"])
-            except discord.NotFound:
+            except (discord.NotFound, discord.HTTPException):
+                # Alte Nachricht weg → neu posten, damit Buttons wieder gehen
+                try:
+                    await self.post_panel(ch, key)
+                except Exception:
+                    pass
                 continue
-            embed = await embed_coro
             try:
-                await msg.edit(embed=embed, view=view)
+                embed = await embed_coro
+                await msg.edit(content=f"# {embed.title or key}", embed=embed, view=view)
             except discord.HTTPException:
-                pass
+                # Edit fehlgeschlagen → neu posten
+                try:
+                    await self.repost_panel(guild, key)
+                except Exception:
+                    pass
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
