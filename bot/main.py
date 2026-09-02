@@ -337,7 +337,11 @@ async def daily_clock():
             delta = 99
         if delta >= 4:
             for g in bot.guilds:
-                await bot.repost_panel(g, "aktivitaet")
+                try:
+                    await bot.repost_panel(g, "aktivitaet")
+                    await bot.log(g, "00:00 Aktivitätscheck (alle 4 Tage).", "Aktivitaet")
+                except Exception as e:
+                    print("aktivitaet repost error", g.id, e)
             await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
         from panels import staff_members

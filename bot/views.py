@@ -116,41 +116,19 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
-    wer = discord.ui.TextInput(label="Wer (Name oder @Mention / ID)", required=True, max_length=80)
     kind = discord.ui.TextInput(label="Regel-Nr (z.B. 2)", required=True, max_length=80)
     grund = discord.ui.TextInput(label="Wie viel", required=True, max_length=100)
     dauer = discord.ui.TextInput(label="Bis wann", required=False, max_length=80)
 
-    def __init__(self, bot):
+    def __init__(self, bot, person: discord.Member):
         super().__init__()
         self.bot = bot
+        self.person = person
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
-        raw = str(self.wer).strip()
-        person = None
-        uid = 0
-        # Mention <@id> oder reine ID
-        import re
-        m = re.search(r"(\d{15,20})", raw)
-        if m:
-            uid = int(m.group(1))
-            person = interaction.guild.get_member(uid)
-        if person is None:
-            # Name suchen
-            low = raw.lower().lstrip("@")
-            for mem in interaction.guild.members:
-                if mem.bot:
-                    continue
-                if low in (mem.display_name or "").lower() or low in (mem.name or "").lower() or low in (mem.nick or "").lower():
-                    person = mem
-                    uid = mem.id
-                    break
-        if person is None and uid == 0:
-            # trotzdem speichern mit Name als Text, user_id 0
-            uid = 0
-        who_txt = person.mention if person else raw
+        uid = self.person.id
         await self.bot.db.execute(
             """
             INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
@@ -163,80 +141,23 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
         sid = (await cur.fetchone())["i"]
         e = discord.Embed(title="Sanktion", color=0xC0392B)
         e.description = (
-            f"**Wer:** {who_txt}\n"
+            f"**Wer:** {self.person.mention}\n"
             f"**Regel:** {self.kind}\n"
             f"**Wie viel:** {self.grund}\n"
             f"**Bis:** {self.dauer or '-'}"
         )
         e.set_footer(text=f"SID:{sid}")
-        await interaction.channel.send(content=f"# Sanktion\n{who_txt}", embed=e, view=SanktionPayView())
+        await interaction.channel.send(
+            content=f"# Sanktion\n{self.person.mention}",
+            embed=e,
+            view=SanktionPayView(),
+        )
         await self.bot.log(
             interaction.guild,
-            f"{interaction.user.mention} hat Sanktion gegen {who_txt}: {self.kind} – {self.grund}",
+            f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.kind} – {self.grund}",
             "Sanktionen",
         )
-        await interaction.response.send_message(f"Sanktion für {who_txt} gepostet.", ephemeral=True)
-
-
-class SanktionBezahltModal(discord.ui.Modal, title="Sanktion bezahlt"):
-    name = discord.ui.TextInput(label="Name / Mention der Person", required=True, max_length=80)
-
-    def __init__(self, bot):
-        super().__init__()
-        self.bot = bot
-
-    async def on_submit(self, interaction: discord.Interaction):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
-        raw = str(self.name).strip()
-        import re
-        uid = None
-        m = re.search(r"(\d{15,20})", raw)
-        if m:
-            uid = int(m.group(1))
-        person = interaction.guild.get_member(uid) if uid else None
-        if person is None:
-            low = raw.lower().lstrip("@")
-            for mem in interaction.guild.members:
-                if mem.bot:
-                    continue
-                if low in (mem.display_name or "").lower() or low in (mem.name or "").lower():
-                    person = mem
-                    uid = mem.id
-                    break
-        if uid:
-            await self.bot.db.execute(
-                "UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,)
-            )
-            await self.bot.db.commit()
-        # passende Nachrichten im Kanal löschen
-        deleted = 0
-        try:
-            async for msg in interaction.channel.history(limit=50):
-                if msg.author.id != interaction.client.user.id:
-                    continue
-                if not msg.embeds:
-                    continue
-                desc = (msg.embeds[0].description or "") + (msg.content or "")
-                hit = False
-                if person and str(person.id) in desc:
-                    hit = True
-                if person and person.mention in desc:
-                    hit = True
-                if raw.lstrip("@").lower() in desc.lower():
-                    hit = True
-                if hit and "Sanktion" in ((msg.embeds[0].title or "") + (msg.content or "")):
-                    try:
-                        await msg.delete()
-                        deleted += 1
-                    except discord.HTTPException:
-                        pass
-        except discord.HTTPException:
-            pass
-        await interaction.response.send_message(
-            f"Als bezahlt markiert" + (f" ({deleted} Nachricht(en) gelöscht)." if deleted else "."),
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"Sanktion für {self.person.mention} gepostet.", ephemeral=True)
 
 
 class SanktionPayView(discord.ui.View):
@@ -245,8 +166,12 @@ class SanktionPayView(discord.ui.View):
 
     @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
     async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Nur Rang 12–10, Leaderschaft, IT, NRW
         if not is_high(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Nur Leadership (Rang 12–10 / Leaderschaft / IT) kann bezahlt markieren.",
+                ephemeral=True,
+            )
         sid = None
         if interaction.message.embeds:
             foot = interaction.message.embeds[0].footer.text or ""
@@ -698,17 +623,13 @@ class SanktionView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
-    @discord.ui.button(label="Sanktionen", style=discord.ButtonStyle.danger, custom_id="san:add")
-    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Sanktion → Person wählen", custom_id="san:who")
+    async def add(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(SanktionModal(self.bot))
-
-    @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paybtn")
-    async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(SanktionBezahltModal(self.bot))
+        if not select.values:
+            return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
+        await interaction.response.send_modal(SanktionModal(self.bot, select.values[0]))
 
 
 class AusruestungView(discord.ui.View):
@@ -1081,7 +1002,7 @@ class RoleConfirmView(discord.ui.View):
         opts = [discord.SelectOption(label=n[:100], value=n) for n in names]
         if not opts:
             opts = [discord.SelectOption(label="keine Ränge", value="none")]
-        sel = discord.ui.Select(placeholder="Rolle wählen (z.B. Rang 11)", custom_id="role:reqpick", options=opts)
+        sel = discord.ui.Select(placeholder="Rolle wählen → wird sofort vergeben", custom_id="role:reqpick", options=opts)
         sel.callback = self._picked
         self.add_item(sel)
 
@@ -1089,20 +1010,9 @@ class RoleConfirmView(discord.ui.View):
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         chosen = interaction.data["values"][0]
-        e = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(title="Rollenanfrage")
-        # alte Felder raus, Gewählt setzen
-        e.clear_fields()
-        e.add_field(name="Gewählt", value=chosen, inline=False)
-        try:
-            await interaction.message.edit(embed=e)
-        except discord.HTTPException:
-            pass
-        await interaction.response.send_message(f"**{chosen}** gewählt. Jetzt **Bestätigen** klicken.", ephemeral=True)
+        if chosen == "none":
+            return await interaction.response.send_message("Keine Ränge konfiguriert.", ephemeral=True)
 
-    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.success, custom_id="role:reqok")
-    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_high(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         if not interaction.message.embeds:
             return await interaction.response.send_message("Keine Anfrage.", ephemeral=True)
         e = interaction.message.embeds[0]
@@ -1112,17 +1022,12 @@ class RoleConfirmView(discord.ui.View):
                 uid = int(e.footer.text.split("UID:")[1].split()[0])
             except ValueError:
                 uid = None
-        chosen = None
-        for f in e.fields:
-            if f.name == "Gewählt":
-                chosen = f.value
-        if not uid or not chosen:
-            return await interaction.response.send_message("Erst eine Rolle wählen.", ephemeral=True)
+        if not uid:
+            return await interaction.response.send_message("User-ID fehlt in der Anfrage.", ephemeral=True)
         member = interaction.guild.get_member(uid)
         if not member:
             return await interaction.response.send_message("User nicht gefunden (nicht mehr auf dem Server?).", ephemeral=True)
 
-        # Rolle finden: exakt, dann case-insensitive, dann Teiltreffer
         role = discord.utils.get(interaction.guild.roles, name=chosen)
         if role is None:
             low = chosen.lower().strip()
@@ -1145,7 +1050,6 @@ class RoleConfirmView(discord.ui.View):
 
         from ranks import rank_names, RANK_ROLE_NAMES
         allowed = set(rank_names(interaction.guild)) | set(RANK_ROLE_NAMES)
-        # alte Rang-Rollen entfernen
         to_remove = []
         for r in member.roles:
             if r == role:
@@ -1153,14 +1057,17 @@ class RoleConfirmView(discord.ui.View):
             if r.name in allowed:
                 to_remove.append(r)
             else:
-                # auch Aliase (Rang 11 etc.)
                 rn = r.name.lower()
-                if any(k in rn for k in ("rang ", "rang:", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er", "lieutenant", "enforcer", "prospect", "recruit", "runner", "associate", "soldier", "made member")):
+                if any(k in rn for k in (
+                    "rang ", "rang:", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er",
+                    "lieutenant", "enforcer", "prospect", "recruit", "runner", "associate",
+                    "soldier", "made member",
+                )):
                     to_remove.append(r)
         try:
             if to_remove:
                 await member.remove_roles(*to_remove, reason=f"Rollenwechsel durch {interaction.user}")
-            await member.add_roles(role, reason=f"Anfrage bestätigt von {interaction.user}")
+            await member.add_roles(role, reason=f"Rollenanfrage durch {interaction.user}")
         except discord.Forbidden:
             return await interaction.response.send_message(
                 "Bot darf die Rolle nicht geben. Bot-Rolle muss **über** den Rang-Rollen stehen.",
@@ -1172,7 +1079,10 @@ class RoleConfirmView(discord.ui.View):
         try:
             bot = interaction.client
             if hasattr(bot, "refresh_panels"):
-                await bot.refresh_panels(interaction.guild, ["mitarbeiter", "rang", "memberliste", "dienst", "aufstellung"])
+                await bot.refresh_panels(
+                    interaction.guild,
+                    ["mitarbeiter", "rang", "memberliste", "dienst", "aufstellung"],
+                )
             if hasattr(bot, "log"):
                 await bot.log(
                     interaction.guild,
@@ -1182,12 +1092,18 @@ class RoleConfirmView(discord.ui.View):
         except Exception:
             pass
 
-        await interaction.message.edit(
-            content=f"# Rolle gegeben\n{member.mention} → **{role.name}** von {interaction.user.mention}",
-            embed=None,
-            view=None,
+        try:
+            await interaction.message.edit(
+                content=f"# Rolle gegeben\n{member.mention} → **{role.name}** von {interaction.user.mention}",
+                embed=None,
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+        await interaction.response.send_message(
+            f"Rolle **{role.name}** an {member.mention} vergeben.",
+            ephemeral=True,
         )
-        await interaction.response.send_message(f"Rolle **{role.name}** an {member.mention} vergeben.", ephemeral=True)
 
 
 class RolleBestaetigenPanelView(discord.ui.View):
