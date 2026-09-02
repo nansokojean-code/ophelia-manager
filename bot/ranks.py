@@ -1,29 +1,30 @@
 # Eure Discord-Rollen, von oben nach unten. Namen müssen EXAKT stimmen.
 RANK_ROLE_NAMES = [
-    "Rang 12 – OG",
-    "Rang 11 – Consigliere",
-    "Rang 10 – Don",
-    "Rang 9 – Capo",
-    "Rang 8 – Lieutenant",
-    "Rang 7 – Enforcer",
-    "Rang 6 – Made Member",
-    "Rang 5 – Soldier",
-    "Rang 4 – Prospect",
-    "Rang 3 – Recruit",
-    "Rang 2 – Runner",
-    "Rang 1 – Associate",
+    "Rang 12:",
+    "Rang 11:",
+    "Rang 10:",
+    "Rang 9:",
+    "Lieutenant (8er)",
+    "Enforcer (7er)",
+    "Made Member (6er)",
+    "Soldier (5er)",
+    "Prospect (4er)",
+    "Recruit (3er)",
+    "Runner (2er)",
+    "Associate (1er)",
 ]
 
 LEADER_ROLES = {
-    "Führung",
-    "Rang 12 – OG",
-    "Rang 11 – Consigliere",
-    "Rang 10 – Don",
+    "Rang 12:",
+    "Rang 11:",
+    "Rang 10:",
+    "Leaderschaft",
+    "IT",
 }
 
 OFFICER_ROLES = LEADER_ROLES | {
-    "Rang 9 – Capo",
-    "Rang 8 – Lieutenant",
+    "Rang 9:",
+    "Lieutenant (8er)",
 }
 
 GOD_ROLES = {
@@ -33,6 +34,7 @@ GOD_ROLES = {
     "NRW-Analyst",
     "NRW Analyst",
     "Leaderschaft",
+    "IT",
 }
 GOD_ROLE = "nrw frakverwaltung"
 HIDDEN_ROLES = {
@@ -101,7 +103,7 @@ def member_role_names(member):
 
 
 def can_route(member):
-    return is_high(member) or highest_rank(member) == "Rang 9 – Capo"
+    return is_high(member) or highest_rank(member) == "Rang 9:"
 
 
 def is_leader(member):
@@ -163,7 +165,7 @@ def is_high(member):
         return True
     rank = highest_rank(member)
     return rank in {
-        "Rang 12 – OG",
-        "Rang 11 – Consigliere",
-        "Rang 10 – Don",
+        "Rang 12:",
+        "Rang 11:",
+        "Rang 10:",
     }

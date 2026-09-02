@@ -105,6 +105,7 @@ class ClubBot(commands.Bot):
         self.add_view(views.StatusView(self))
         self.add_view(views.BlacklistView(self))
         self.add_view(views.RolleAnfrageView(self))
+        self.add_view(views.RoleConfirmView())
         self.add_view(views.ClipAntragView(self))
         self.add_view(views.LootView(self))
         self.add_view(views.RouteCheckView(self))

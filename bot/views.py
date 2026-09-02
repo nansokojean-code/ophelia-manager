@@ -802,6 +802,60 @@ class BlacklistView(discord.ui.View):
         await interaction.response.send_modal(BlacklistDelModal(self.bot))
 
 
+class RoleConfirmView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        from ranks import RANK_ROLE_NAMES
+        opts = [discord.SelectOption(label=n[:100], value=n) for n in RANK_ROLE_NAMES[:25]]
+        sel = discord.ui.Select(placeholder="Rolle wählen", custom_id="role:reqpick", options=opts)
+        sel.callback = self._picked
+        self.add_item(sel)
+
+    async def _picked(self, interaction: discord.Interaction):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        chosen = interaction.data["values"][0]
+        e = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(title="Rollenanfrage")
+        e.clear_fields()
+        e.add_field(name="Gewählt", value=chosen, inline=False)
+        await interaction.message.edit(embed=e)
+        await interaction.response.send_message(f"**{chosen}** gewählt. Jetzt Bestätigen.", ephemeral=True)
+
+    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.success, custom_id="role:reqok")
+    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        if not interaction.message.embeds:
+            return await interaction.response.send_message("Keine Anfrage.", ephemeral=True)
+        e = interaction.message.embeds[0]
+        uid = None
+        if e.footer and e.footer.text and "UID:" in e.footer.text:
+            try:
+                uid = int(e.footer.text.split("UID:")[1].split()[0])
+            except ValueError:
+                uid = None
+        chosen = None
+        for f in e.fields:
+            if f.name == "Gewählt":
+                chosen = f.value
+        if not uid or not chosen:
+            return await interaction.response.send_message("Erst eine Rolle wählen.", ephemeral=True)
+        member = interaction.guild.get_member(uid)
+        role = discord.utils.get(interaction.guild.roles, name=chosen)
+        if not member or not role:
+            return await interaction.response.send_message("User oder Rolle nicht gefunden. Name muss exakt stimmen.", ephemeral=True)
+        try:
+            await member.add_roles(role, reason=f"Anfrage bestätigt von {interaction.user}")
+        except discord.Forbidden:
+            return await interaction.response.send_message("Bot darf die Rolle nicht geben (Reihenfolge).", ephemeral=True)
+        await interaction.message.edit(
+            content=f"# Rolle gegeben\n{member.mention} → **{chosen}** von {interaction.user.mention}",
+            embed=None,
+            view=None,
+        )
+        await interaction.response.send_message("Rolle vergeben.", ephemeral=True)
+
+
 class RolleAnfrageView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
@@ -809,24 +863,21 @@ class RolleAnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Rolle anfragen", style=discord.ButtonStyle.primary, custom_id="role:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.bot.log(interaction.guild, f"{interaction.user.mention} fragt eine Rolle an.", "Rollenanfrage")
         ziel = discord.utils.find(
-            lambda c: "rollen" in c.name.lower() and "bestätig" in c.name.lower(),
+            lambda c: "rollen-anfrage-bestätigen" in c.name.lower()
+            or ("rollen" in c.name.lower() and "bestätig" in c.name.lower()),
             interaction.guild.text_channels,
         )
-        if ziel:
-            await ziel.send(f"**Rollenanfrage:** {interaction.user.mention} ({interaction.user.display_name})")
-        await interaction.response.send_message("Anfrage ist raus. 10–12 / NRW vergibt die Rolle.", ephemeral=True)
-
-    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Wem Rolle geben? (nur 10–12 / NRW)", custom_id="role:who")
-    async def give(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-        if not is_high(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await interaction.response.send_message(
-            f"Rang für {select.values[0].mention} wählen:",
-            view=RangPickView(self.bot, select.values[0]),
-            ephemeral=True,
-        )
+        if not ziel:
+            return await interaction.response.send_message(
+                "Kanal `#rollen-anfrage-bestätigen` fehlt.", ephemeral=True
+            )
+        e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
+        e.description = f"# {interaction.user.mention}\n**{interaction.user.display_name}** will eine Rolle."
+        e.set_footer(text=f"UID:{interaction.user.id}")
+        await ziel.send(content=f"# Rollenanfrage\n{interaction.user.mention}", embed=e, view=RoleConfirmView())
+        await self.bot.log(interaction.guild, f"{interaction.user.mention} fragt eine Rolle an.", "Rollenanfrage")
+        await interaction.response.send_message("Anfrage ist in `#rollen-anfrage-bestätigen`.", ephemeral=True)
 
 
 class ClipAntragView(discord.ui.View):
