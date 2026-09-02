@@ -915,15 +915,21 @@ class RolleAnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Rolle anfragen", style=discord.ButtonStyle.primary, custom_id="role:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
-        def _nm(c):
-            n = c.name.lower()
-            for a, b in (("ä", "a"), ("ö", "o"), ("ü", "u"), ("ß", "ss"), ("︱", "|"), ("✅", ""), ("🎭", "")):
-                n = n.replace(a, b)
-            return n
-        ziel = discord.utils.find(
-            lambda c: "bestatig" in _nm(c) or ("rollen" in _nm(c) and "anfrage" in _nm(c) and "bestat" in _nm(c)),
-            interaction.guild.text_channels,
-        )
+        import database as dbmod
+        ziel = None
+        row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:rollenbestaetigen")
+        if row:
+            ziel = interaction.guild.get_channel(row["channel_id"])
+        if not ziel:
+            def _nm(c):
+                n = c.name.lower()
+                for a, b in (("ä", "a"), ("ö", "o"), ("ü", "u"), ("ß", "ss"), ("︱", "|"), ("✅", ""), ("🎭", "")):
+                    n = n.replace(a, b)
+                return n
+            ziel = discord.utils.find(
+                lambda c: "bestatig" in _nm(c) or "bestaetigen" in _nm(c),
+                interaction.guild.text_channels,
+            )
         if not ziel:
             return await interaction.response.send_message(
                 "Kanal `#rollen-anfrage-bestätigen` fehlt.", ephemeral=True

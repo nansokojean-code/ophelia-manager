@@ -556,12 +556,19 @@ async def embed_lootdrop(db):
 
 
 async def embed_rollenanfrage():
-    e = discord.Embed(title="Rollen-Anfrage", color=0x3B82C4)
-    e.description = (
-        "Neu auf dem Server? Button **Rolle anfragen**.\n"
-        "Leadership vergibt danach die Rolle."
-    )
+    e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
+    e.description = "Button **Rolle anfragen**.\nLeadership sieht das in **rollen-anfrage-bestätigen**."
     e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_rollenbestaetigen():
+    e = discord.Embed(title="Rollenanfrage bestätigen", color=0x3B82C4)
+    e.description = (
+        "Hier erscheinen die Anfragen.\n"
+        "Unter dem User: Rolle wählen → **Bestätigen**."
+    )
+    e.set_footer(text=now_footer("Nur Leadership"))
     return e
 
 
