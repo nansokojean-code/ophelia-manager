@@ -409,8 +409,8 @@ class DienstView(discord.ui.View):
             (interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
-        await interaction.followup.send("Du bist **angemeldet**.", ephemeral=True)
+        await self.bot.repost_panel(interaction.guild, "aufstellung")
+        await interaction.followup.send("Du bist **angemeldet**. Stehst jetzt unter Angemeldet.", ephemeral=True)
 
     @discord.ui.button(label="Aufstellung verschieben", style=discord.ButtonStyle.primary, custom_id="dienst:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -427,8 +427,8 @@ class DienstView(discord.ui.View):
             (interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
-        await interaction.followup.send("Du bist **abgemeldet**.", ephemeral=True)
+        await self.bot.repost_panel(interaction.guild, "aufstellung")
+        await interaction.followup.send("Du bist **abgemeldet**. Stehst jetzt unter Abgemeldet.", ephemeral=True)
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="dienst:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
