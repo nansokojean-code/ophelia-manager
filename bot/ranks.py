@@ -134,6 +134,25 @@ def highest_rank(member):
     for rank in rank_names(member.guild):
         if rank in names:
             return rank
+    low = {n.lower() for n in names}
+    aliases = [
+        ("Rang 12:", ("rang 12",)),
+        ("Rang 11:", ("rang 11",)),
+        ("Rang 10:", ("rang 10",)),
+        ("Rang 9:", ("rang 9",)),
+        ("Lieutenant (8er)", ("8er", "lieutenant")),
+        ("Enforcer (7er)", ("7er", "enforcer")),
+        ("Made Member (6er)", ("6er", "made member")),
+        ("Soldier (5er)", ("5er", "soldier")),
+        ("Prospect (4er)", ("4er", "prospect")),
+        ("Recruit (3er)", ("3er", "recruit")),
+        ("Runner (2er)", ("2er", "runner")),
+        ("Associate (1er)", ("1er", "associate")),
+    ]
+    for official, keys in aliases:
+        for n in low:
+            if any(k in n for k in keys):
+                return official
     return None
 
 

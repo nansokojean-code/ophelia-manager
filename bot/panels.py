@@ -170,7 +170,7 @@ async def embed_dienststatus(guild, db, title="Aufstellung", ping=False):
     rows = {r["user_id"]: r for r in await cur.fetchall()}
 
     buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
-    for m in staff_members(guild):
+    for m in visible_members(guild):
         row = rows.get(m.id)
         status = row["status"] if row else "offen"
         if status not in buckets:

@@ -399,6 +399,7 @@ class DienstView(discord.ui.View):
 
     @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="dienst:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             """
             INSERT INTO attendance(user_id, status, reason, updated_at)
@@ -408,9 +409,8 @@ class DienstView(discord.ui.View):
             (interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
-        await self.bot.log(interaction.guild, f"{interaction.user.mention} hat sich angemeldet.")
-        await interaction.response.send_message("Du bist jetzt **angemeldet**.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
+        await interaction.followup.send("Du bist **angemeldet**.", ephemeral=True)
 
     @discord.ui.button(label="Aufstellung verschieben", style=discord.ButtonStyle.primary, custom_id="dienst:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -420,17 +420,15 @@ class DienstView(discord.ui.View):
 
     @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="dienst:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await self.bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (interaction.user.id,))
         await self.bot.db.execute(
-            """
-            INSERT INTO attendance(user_id, status, reason, updated_at)
-            VALUES(?, 'abgemeldet', '', ?)
-            ON CONFLICT(user_id) DO UPDATE SET status='abgemeldet', reason='', updated_at=excluded.updated_at
-            """,
+            "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, 'abgemeldet', 'Aufstellung', ?)",
             (interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
-        await interaction.response.send_message("Du bist **abgemeldet**.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
+        await interaction.followup.send("Du bist **abgemeldet**.", ephemeral=True)
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="dienst:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
