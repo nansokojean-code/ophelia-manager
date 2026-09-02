@@ -12,6 +12,23 @@ def stamp():
 LEAD_MSG = "Nur Leadership kann das ausführen."
 
 
+def fancy_name(text: str) -> str:
+    out = []
+    for ch in text:
+        o = ord(ch)
+        if 65 <= o <= 90:
+            out.append(chr(0x1D400 + (o - 65)))
+        elif 97 <= o <= 122:
+            out.append(chr(0x1D41A + (o - 97)))
+        elif 48 <= o <= 57:
+            out.append(chr(0x1D7CE + (o - 48)))
+        elif ch in "-_ ":
+            out.append("-" if ch == " " else ch)
+        else:
+            continue
+    return "".join(out)[:40] or "User"
+
+
 async def lead_repost(interaction, bot, key):
     if not is_high(interaction.user):
         return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
@@ -338,6 +355,32 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub beantragen"):
         await interaction.response.send_message("Urlaub eingetragen.", ephemeral=True)
 
 
+class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
+    zeit = discord.ui.TextInput(label="Neue Uhrzeit (z.B. 19:30)", required=True, max_length=10)
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
+        zeit = str(self.zeit).strip()
+        import database as dbmod
+        from panels import ping_ophelia
+        await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
+        await interaction.response.defer(ephemeral=True)
+        await self.bot.repost_panel(interaction.guild, "aufstellung")
+        row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:aufstellung")
+        ch = interaction.guild.get_channel(row["channel_id"]) if row else interaction.channel
+        if ch:
+            await ch.send(
+                f"# Aufstellung verschoben\n{ping_ophelia(interaction.guild)}\n"
+                f"Aufstellung wurde verschoben um **{zeit} Uhr**."
+            )
+        await interaction.followup.send(f"Verschoben auf {zeit} Uhr.", ephemeral=True)
+
+
 class DienstView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
@@ -357,6 +400,12 @@ class DienstView(discord.ui.View):
         await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
         await self.bot.log(interaction.guild, f"{interaction.user.mention} hat sich angemeldet.")
         await interaction.response.send_message("Du bist jetzt **angemeldet**.", ephemeral=True)
+
+    @discord.ui.button(label="Aufstellung verschieben", style=discord.ButtonStyle.primary, custom_id="dienst:shift")
+    async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
+        await interaction.response.send_modal(AufstellungZeitModal(self.bot))
 
     @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="dienst:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -565,7 +614,7 @@ class TicketView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         cat = await _get_or_create_category(interaction.guild, "Clips")
         raw = interaction.user.display_name or interaction.user.name
-        safe = "".join(c for c in raw if c.isalnum() or c in "-_ ")[:20].strip() or "user"
+        safe = fancy_name(raw)
         ch = await interaction.guild.create_text_channel(
             name=f"🔫︱{safe}",
             category=cat,
@@ -908,7 +957,7 @@ class ClipAntragView(discord.ui.View):
         if cat is None:
             cat = await interaction.guild.create_category("Kill-Logs")
         raw = interaction.user.display_name or interaction.user.name
-        safe = "".join(ch for ch in raw if ch.isalnum() or ch in "-_ ")[:20].strip() or "user"
+        safe = fancy_name(raw)
         channel = await interaction.guild.create_text_channel(name=f"🔫︱{safe}", category=cat)
         await self.bot.db.execute(
             "INSERT INTO clip_channels(user_id, channel_id) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET channel_id=excluded.channel_id",

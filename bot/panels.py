@@ -109,7 +109,12 @@ async def embed_rangsystem_users(guild):
 
 
 async def embed_aufstellung(guild, db):
-    return await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+    import database as dbmod
+    zeit = await dbmod.get_setting(db, f"aufstellung_time:{guild.id}", "18:00")
+    e = await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+    head = f"**Heute um {zeit} Uhr Aufstellung.**\nSeid pünktlich da.\n\n"
+    e.description = head + (e.description or "")
+    return e
 
 
 async def embed_abmeldung(guild, db):
