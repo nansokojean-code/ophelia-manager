@@ -56,8 +56,16 @@ def has_god(member):
 
 
 def hidden_from_lists(member):
-    names = {_norm(r.name) for r in member.roles}
-    return bool(names & {_norm(x) for x in HIDDEN_ROLES})
+    for r in member.roles:
+        n = r.name.lower()
+        if "nrw" in n or "frakverwaltung" in n or "analyst" in n:
+            return True
+        if n.strip() in {"it", "leaderschaft", "team"}:
+            return True
+    text = f"{member.display_name} {member.name} {member.nick or ''}".lower()
+    if "nrw" in text:
+        return True
+    return False
 
 ROSTER_AREAS = ["Bar", "Tür", "Service", "Büro", "Nicht eingeteilt"]
 
