@@ -21,7 +21,7 @@ load_dotenv(ROOT / ".env")
 import database
 import panels
 import views
-from ranks import is_leader, is_officer, rank_names, set_areas, set_guild_roles
+from ranks import is_high, is_leader, is_officer, rank_names, set_areas, set_guild_roles
 
 
 intents = discord.Intents.default()
@@ -51,6 +51,7 @@ SETUP_PANELS = [
     "arbeiter",
     "urlaub",
     "rollenanfrage",
+    "rollenbestaetigen",
     "clipantrag",
     "tickets",
 ]
@@ -105,12 +106,15 @@ class ClubBot(commands.Bot):
         self.add_view(views.StatusView(self))
         self.add_view(views.BlacklistView(self))
         self.add_view(views.RolleAnfrageView(self))
+        self.add_view(views.RoleConfirmView())
+        self.add_view(views.RolleBestaetigenPanelView(self))
         self.add_view(views.ClipAntragView(self))
         self.add_view(views.LootView(self))
         self.add_view(views.RouteCheckView(self))
         self.add_view(views.AbmeldungView(self))
         self.add_view(views.AbgabeView(self))
         self.add_view(views.KasseView(self))
+        self.add_view(views.SanktionPayView())
         self.add_view(views.RouteView(self))
         self.add_view(views.EinkaufView(self))
         self.add_view(views.ArbeiterView(self))
@@ -147,7 +151,7 @@ class ClubBot(commands.Bot):
         mapping = {
             "mitarbeiter": ("mitarbeiter", panels.embed_mitarbeiter(guild), None),
             "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
-            "rang": ("rang", panels.embed_rangsystem(guild), views.RangView(self)),
+            "rang": ("rang", panels.embed_rangsystem(guild), None),
             "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": ("dienst", panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": ("katalog", panels.embed_katalog(self.db), None),
@@ -169,6 +173,7 @@ class ClubBot(commands.Bot):
             "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
+            "rollenbestaetigen": ("rollenbestaetigen", panels.embed_rollenbestaetigen(), None),
             "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
             "abgaben": ("abgaben", panels.embed_abgaben(self.db), views.AbgabeView(self)),
             "kasse": ("kasse", panels.embed_kasse(self.db), views.KasseView(self)),
@@ -176,6 +181,8 @@ class ClubBot(commands.Bot):
         targets = names or list(mapping.keys())
         for name in targets:
             if name == "aktivitaet":
+                continue
+            if name not in mapping:
                 continue
             key, embed_coro, view = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
@@ -186,20 +193,29 @@ class ClubBot(commands.Bot):
                 continue
             try:
                 msg = await ch.fetch_message(row["message_id"])
-            except discord.NotFound:
+            except (discord.NotFound, discord.HTTPException):
+                # Alte Nachricht weg → neu posten, damit Buttons wieder gehen
+                try:
+                    await self.post_panel(ch, key)
+                except Exception:
+                    pass
                 continue
-            embed = await embed_coro
             try:
-                await msg.edit(embed=embed, view=view)
+                embed = await embed_coro
+                await msg.edit(content=f"# {embed.title or key}", embed=embed, view=view)
             except discord.HTTPException:
-                pass
+                # Edit fehlgeschlagen → neu posten
+                try:
+                    await self.repost_panel(guild, key)
+                except Exception:
+                    pass
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
         builders = {
             "mitarbeiter": (panels.embed_mitarbeiter(guild), None),
             "memberliste": (panels.embed_memberliste(guild), None),
-            "rang": (panels.embed_rangsystem(guild), views.RangView(self)),
+            "rang": (panels.embed_rangsystem(guild), None),
             "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
             "dienst": (panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
             "katalog": (panels.embed_katalog(self.db), None),
@@ -221,6 +237,7 @@ class ClubBot(commands.Bot):
             "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
             "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
             "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
+            "rollenbestaetigen": (panels.embed_rollenbestaetigen(), None),
             "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
             "abgaben": (panels.embed_abgaben(self.db), views.AbgabeView(self)),
             "kasse": (panels.embed_kasse(self.db), views.KasseView(self)),
@@ -235,7 +252,8 @@ class ClubBot(commands.Bot):
             msg = await channel.send(**kwargs)
         else:
             embed = await embed_coro
-            msg = await channel.send(embed=embed, view=view)
+            heading = embed.title or key
+            msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 
@@ -305,9 +323,24 @@ async def daily_clock():
             await bot.db.execute("DELETE FROM attendance")
             await bot.db.commit()
             await bot.repost_panel(g, "aufstellung")
-            await bot.log(g, "00:00 neue Aufstellung.")
+            await bot.log(g, "00:00 neue Aufstellung.", "Aufstellung")
+        last_akt = await database.get_setting(bot.db, "last_aktivitaet_date", "")
+        day = now.strftime("%Y-%m-%d")
+        if last_akt:
+            from datetime import date as _date
+            try:
+                prev = _date.fromisoformat(last_akt)
+                delta = (_date.fromisoformat(day) - prev).days
+            except ValueError:
+                delta = 99
+        else:
+            delta = 99
+        if delta >= 4:
+            for g in bot.guilds:
+                await bot.repost_panel(g, "aktivitaet")
+            await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
-        from panels import visible_members
+        from panels import staff_members
         for g in bot.guilds:
             cur = await bot.db.execute("SELECT user_id, status FROM attendance")
             rows = {r["user_id"]: r["status"] for r in await cur.fetchall()}
@@ -316,7 +349,7 @@ async def daily_clock():
             )
             vac = {r["user_id"] for r in await cur.fetchall()}
             hit = []
-            for m in visible_members(g):
+            for m in staff_members(g):
                 if m.id in vac:
                     continue
                 st = rows.get(m.id, "offen")
@@ -333,7 +366,14 @@ async def daily_clock():
             await bot.db.commit()
             if hit:
                 await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
-                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]))
+                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]), "Sanktionen")
+                prow = await database.get_panel(bot.db, f"{g.id}:sanktionen")
+                sch = g.get_channel(prow["channel_id"]) if prow else discord.utils.find(lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(), g.text_channels)
+                if sch:
+                    for m in hit:
+                        e = discord.Embed(title="SANKTION 50k", color=0xC0392B)
+                        e.description = f"**Wer:** {m.mention}\n**Regel:** REGEL 2\n**Grund:** nicht angemeldet / nicht abgemeldet\n**Höhe:** 50k"
+                        await sch.send(content=f"# Sanktion\n{m.mention} — 50k", embed=e)
 
 
 @daily_clock.before_loop
@@ -648,6 +688,23 @@ async def sanktion_aufheben(interaction: discord.Interaction, person: discord.Me
     await bot.refresh_panels(interaction.guild, ["sanktionen"])
     await bot.log(interaction.guild, f"{interaction.user.mention} hat Sanktionen von {person.mention} aufgehoben.")
     await interaction.response.send_message("Sanktionen aufgehoben.", ephemeral=True)
+
+
+@bot.tree.command(name="ophelia_clean", description="Alle Nachrichten von Ophelia Manager löschen")
+async def ophelia_clean(interaction: discord.Interaction):
+    if not is_high(interaction.user):
+        return await interaction.response.send_message("Nur Leadership.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    deleted = 0
+    for ch in list(interaction.guild.text_channels) + list(interaction.guild.threads):
+        try:
+            async for msg in ch.history(limit=200):
+                if msg.author.id == bot.user.id:
+                    await msg.delete()
+                    deleted += 1
+        except discord.HTTPException:
+            continue
+    await interaction.followup.send(f"{deleted} Bot-Nachrichten gelöscht.", ephemeral=True)
 
 
 @bot.tree.command(name="arbeiter_setzen", description="Arbeiter-Daten setzen (kein Ausweis-Foto)")

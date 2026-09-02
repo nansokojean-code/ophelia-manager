@@ -1,39 +1,49 @@
 # Eure Discord-Rollen, von oben nach unten. Namen müssen EXAKT stimmen.
 RANK_ROLE_NAMES = [
-    "Rang 12 – OG",
-    "Rang 11 – Consigliere",
-    "Rang 10 – Don",
-    "Rang 9 – Capo",
-    "Rang 8 – Lieutenant",
-    "Rang 7 – Enforcer",
-    "Rang 6 – Made Member",
-    "Rang 5 – Soldier",
-    "Rang 4 – Prospect",
-    "Rang 3 – Recruit",
-    "Rang 2 – Runner",
-    "Rang 1 – Associate",
+    "Rang 12:",
+    "Rang 11:",
+    "Rang 10:",
+    "Rang 9:",
+    "Lieutenant (8er)",
+    "Enforcer (7er)",
+    "Made Member (6er)",
+    "Soldier (5er)",
+    "Prospect (4er)",
+    "Recruit (3er)",
+    "Runner (2er)",
+    "Associate (1er)",
 ]
 
 LEADER_ROLES = {
-    "Führung",
-    "Rang 12 – OG",
-    "Rang 11 – Consigliere",
-    "Rang 10 – Don",
+    "Rang 12:",
+    "Rang 11:",
+    "Rang 10:",
+    "Leaderschaft",
+    "IT",
 }
 
 OFFICER_ROLES = LEADER_ROLES | {
-    "Rang 9 – Capo",
-    "Rang 8 – Lieutenant",
+    "Rang 9:",
+    "Lieutenant (8er)",
 }
 
 GOD_ROLES = {
     "nrw frakverwaltung",
     "NRW Fraktionsverwaltung",
+    "NRW | Fraktionsverwaltung",
+    "NRW-Analyst",
+    "NRW Analyst",
+    "Leaderschaft",
+    "IT",
+}
+GOD_ROLE = "nrw frakverwaltung"
+HIDDEN_ROLES = {
+    "nrw frakverwaltung",
+    "NRW Fraktionsverwaltung",
+    "NRW | Fraktionsverwaltung",
     "NRW-Analyst",
     "NRW Analyst",
 }
-GOD_ROLE = "nrw frakverwaltung"
-HIDDEN_ROLES = {"nrw frakverwaltung", "NRW Fraktionsverwaltung", "NRW-Analyst", "NRW Analyst"}
 
 
 def _norm(name):
@@ -46,8 +56,16 @@ def has_god(member):
 
 
 def hidden_from_lists(member):
-    names = {_norm(r.name) for r in member.roles}
-    return bool(names & {_norm(x) for x in HIDDEN_ROLES})
+    for r in member.roles:
+        n = r.name.lower()
+        if "nrw" in n or "frakverwaltung" in n or "analyst" in n:
+            return True
+        if n.strip() in {"it", "leaderschaft", "team"}:
+            return True
+    text = f"{member.display_name} {member.name} {member.nick or ''}".lower()
+    if "nrw" in text:
+        return True
+    return False
 
 ROSTER_AREAS = ["Bar", "Tür", "Service", "Büro", "Nicht eingeteilt"]
 
@@ -92,13 +110,12 @@ def member_role_names(member):
     return {r.name for r in member.roles}
 
 
+def can_route(member):
+    return is_high(member) or highest_rank(member) == "Rang 9:"
+
+
 def is_leader(member):
-    names = member_role_names(member)
-    return (
-        bool(names & cfg(member.guild)["leaders"])
-        or member.guild_permissions.administrator
-        or has_god(member)
-    )
+    return is_high(member)
 
 
 def is_officer(member):
@@ -121,10 +138,44 @@ def can_blacklist(member):
 
 
 def highest_rank(member):
+    """Hoechster Rang (12 -> 1). Nur Leute mit einem dieser Raenge stehen in der Aufstellung."""
     names = member_role_names(member)
-    for rank in rank_names(member.guild):
+    configured = rank_names(member.guild)
+    for rank in configured:
         if rank in names:
             return rank
+    low_map = {n.lower().strip(): n for n in names}
+    for rank in configured:
+        rl = rank.lower().strip()
+        if rl in low_map:
+            return rank
+        for ln in low_map:
+            if rl and (rl in ln or ln in rl):
+                return rank
+    low = {n.lower() for n in names}
+    aliases = [
+        ("Rang 12:", ("rang 12", "r12", "12er")),
+        ("Rang 11:", ("rang 11", "r11", "11er")),
+        ("Rang 10:", ("rang 10", "r10", "10er")),
+        ("Rang 9:", ("rang 9", "r9", "9er")),
+        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant", "r8")),
+        ("Enforcer (7er)", ("rang 7", "7er", "enforcer", "r7")),
+        ("Made Member (6er)", ("rang 6", "6er", "made member", "r6")),
+        ("Soldier (5er)", ("rang 5", "5er", "soldier", "r5")),
+        ("Prospect (4er)", ("rang 4", "4er", "prospect", "r4")),
+        ("Recruit (3er)", ("rang 3", "3er", "recruit", "r3")),
+        ("Runner (2er)", ("rang 2", "2er", "runner", "r2")),
+        ("Associate (1er)", ("rang 1", "1er", "associate", "r1")),
+    ]
+    for official, keys in aliases:
+        for n in low:
+            if any(k in n for k in keys):
+                if official in configured or not configured:
+                    return official
+                for rank in configured:
+                    if any(k in rank.lower() for k in keys):
+                        return rank
+                return official
     return None
 
 
@@ -148,12 +199,15 @@ def display_line(member):
 
 
 def is_high(member):
-    """Rang 10–12 + NRW-Analyst + NRW Fraktionsverwaltung."""
-    if has_god(member) or member.guild_permissions.administrator:
+    """Nur 10–12 + NRW + Leaderschaft. Admin-Recht allein reicht nicht."""
+    if has_god(member):
+        return True
+    names = member_role_names(member)
+    if "Leaderschaft" in names:
         return True
     rank = highest_rank(member)
     return rank in {
-        "Rang 12 – OG",
-        "Rang 11 – Consigliere",
-        "Rang 10 – Don",
+        "Rang 12:",
+        "Rang 11:",
+        "Rang 10:",
     }

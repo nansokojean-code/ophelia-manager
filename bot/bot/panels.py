@@ -97,7 +97,7 @@ async def embed_rangsystem_users(guild):
         return e
     parts = []
     for i, rank in enumerate(names):
-        hint = "Leitung" if i == 0 else ("Teamleitung" if i == 1 else "Mitarbeiter")
+        hint = ""
         people = sorted(grouped[rank], key=lambda x: x.display_name.lower())
         parts.append(f"**{rank} ({len(people)}) {hint}**")
         if people:
@@ -109,11 +109,33 @@ async def embed_rangsystem_users(guild):
 
 
 async def embed_aufstellung(guild, db):
-    return await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+    import database as dbmod
+    zeit = await dbmod.get_setting(db, f"aufstellung_time:{guild.id}", "18:00")
+    e = await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+    head = f"**Heute um {zeit} Uhr Aufstellung.**\nSeid pünktlich da.\n\n"
+    e.description = head + (e.description or "")
+    return e
 
 
 async def embed_abmeldung(guild, db):
-    return await embed_dienststatus(guild, db, title="Abmeldung", ping=False)
+    cur = await db.execute(
+        "SELECT user_id, reason, updated_at FROM attendance WHERE status = 'abgemeldet' ORDER BY updated_at DESC"
+    )
+    rows = await cur.fetchall()
+    e = discord.Embed(title="Abmeldung", color=0x2B2D31)
+    if not rows:
+        e.description = "_keine Abmeldungen_"
+    else:
+        parts = []
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            who = display_line(m) if m else f"User {r['user_id']}"
+            parts.append(f"**{who}**")
+            parts.append(r["reason"] or "kein Grund")
+            parts.append("")
+        e.description = "\n".join(parts).strip()[:4000]
+    e.set_footer(text=now_footer())
+    return e
 
 
 async def embed_aufstellung_old(guild, db):
@@ -148,7 +170,7 @@ async def embed_dienststatus(guild, db, title="Aufstellung", ping=False):
     rows = {r["user_id"]: r for r in await cur.fetchall()}
 
     buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
-    for m in visible_members(guild):
+    for m in staff_members(guild):
         row = rows.get(m.id)
         status = row["status"] if row else "offen"
         if status not in buckets:
@@ -310,33 +332,22 @@ async def embed_lager(db):
 
 async def embed_urlaub(guild, db):
     cur = await db.execute(
-        "SELECT user_id, start, end, reason, status FROM vacations ORDER BY id DESC LIMIT 30"
+        "SELECT user_id, start, end, reason FROM vacations ORDER BY id DESC LIMIT 30"
     )
     rows = await cur.fetchall()
-    buckets = defaultdict(list)
-    for r in rows:
-        buckets[r["status"]].append(r)
-
-    def name(uid):
-        m = guild.get_member(uid)
-        return display_line(m) if m else f"`{uid}`"
-
     e = discord.Embed(title="Urlaub", color=0x2B2D31)
-    parts = []
-    for title, key in (
-        ("Beantragt", "beantragt"),
-        ("Genehmigt / Aktiv", "genehmigt"),
-        ("Abgelehnt", "abgelehnt"),
-    ):
-        items = buckets.get(key, [])
-        parts.append(f"**{title} ({len(items)})**")
-        if items:
-            for r in items:
-                parts.append(f"{name(r['user_id'])} | {r['start']} – {r['end']} | {r['reason']}")
-        else:
-            parts.append("_niemand_")
-        parts.append("")
-    e.description = "\n".join(parts).strip()
+    if not rows:
+        e.description = "**Eingetragen**\n\nnicht vorhanden"
+    else:
+        lines = [f"**Eingetragen ({len(rows)})**", ""]
+        for r in rows:
+            m = guild.get_member(r["user_id"])
+            who = display_line(m) if m else f"User {r['user_id']}"
+            lines.append(f"**{who}**")
+            lines.append(f"{r['start']} – {r['end']}")
+            lines.append(f"{r['reason']}")
+            lines.append("")
+        e.description = "\n".join(lines).strip()[:4000]
     e.set_footer(text=now_footer())
     return e
 
@@ -448,7 +459,7 @@ async def embed_blacklist(db):
     rows = await cur.fetchall()
     e = discord.Embed(title="Blacklist", color=0x2B2D31)
     e.description = "\n".join(f"• {r['name']}  ·  {r['created_at']}" for r in rows) or "_leer_"
-    e.set_footer(text=now_footer("nur Rang 12–9"))
+    e.set_footer(text=now_footer("Nur Leadership kann das ausführen"))
     return e
 
 
@@ -534,12 +545,19 @@ async def embed_lootdrop(db):
 
 
 async def embed_rollenanfrage():
-    e = discord.Embed(title="Rollen-Anfrage", color=0x3B82C4)
-    e.description = (
-        "Neu auf dem Server? Button **Rolle anfragen**.\n"
-        "Leadership (Rang 12–9) vergibt danach die Rolle."
-    )
+    e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
+    e.description = "Button **Rolle anfragen**.\nLeadership sieht das in **rollen-anfrage-bestätigen**."
     e.set_footer(text=now_footer())
+    return e
+
+
+async def embed_rollenbestaetigen():
+    e = discord.Embed(title="Rollenanfrage bestätigen", color=0x3B82C4)
+    e.description = (
+        "Hier erscheinen die Anfragen.\n"
+        "Unter dem User: Rolle wählen → **Bestätigen**."
+    )
+    e.set_footer(text=now_footer("Nur Leadership"))
     return e
 
 

@@ -184,18 +184,10 @@ async def init(db: aiosqlite.Connection):
         )
         await set_setting(db, "rules_seed", "2")
 
-    cur = await db.execute("SELECT COUNT(*) AS c FROM inventory")
-    if (await cur.fetchone())["c"] == 0:
-        await db.executemany(
-            "INSERT INTO inventory (item, category, qty) VALUES (?, ?, ?)",
-            [
-                ("Cola", "Getränke", 24),
-                ("Wasser", "Getränke", 40),
-                ("Energy", "Getränke", 12),
-                ("Funkgeräte", "Material", 8),
-                ("Uniformen", "Material", 15),
-            ],
-        )
+    clear_inv = await get_setting(db, "lager_cleared", "0")
+    if clear_inv != "1":
+        await db.execute("DELETE FROM inventory")
+        await set_setting(db, "lager_cleared", "1")
 
     cur = await db.execute("SELECT COUNT(*) AS c FROM equipment_items")
     if (await cur.fetchone())["c"] == 0:
