@@ -12,6 +12,17 @@ def stamp():
 LEAD_MSG = "Nur Leadership kann das ausführen."
 
 
+def ping_leaderschaft(guild):
+    import unicodedata
+    for r in guild.roles:
+        n = unicodedata.normalize("NFKD", r.name).encode("ascii", "ignore").decode().lower()
+        raw = r.name.lower()
+        if "leaderschaft" in raw or "leadership" in raw or "leaderschaft" in n:
+            return r.mention
+    return "@Leaderschaft"
+
+
+
 def fancy_name(text: str) -> str:
     out = []
     for ch in text:
@@ -959,7 +970,7 @@ class RolleAnfrageView(discord.ui.View):
         e = discord.Embed(title="Rollenanfrage", color=0x3B82C4)
         e.description = f"# {interaction.user.mention}\n**{interaction.user.display_name}** will eine Rolle."
         e.set_footer(text=f"UID:{interaction.user.id}")
-        await ziel.send(content=f"# Rollenanfrage\n{interaction.user.mention}", embed=e, view=RoleConfirmView())
+        await ziel.send(content=f"# Rollenanfrage\n{ping_leaderschaft(interaction.guild)}", embed=e, view=RoleConfirmView())
         await interaction.response.send_message(f"Anfrage ist in {ziel.mention}.", ephemeral=True)
 
 
