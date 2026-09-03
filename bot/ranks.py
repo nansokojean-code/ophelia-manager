@@ -56,9 +56,10 @@ def has_god(member):
 
 
 def hidden_from_lists(member):
+    """NRW-Team, IT, Leaderschaft-only usw. nie in Listen / Auswahl."""
     for r in member.roles:
         n = r.name.lower()
-        if "nrw" in n or "frakverwaltung" in n or "analyst" in n:
+        if "nrw" in n or "frakverwaltung" in n or "analyst" in n or "kickbot" in n:
             return True
         if n.strip() in {"it", "leaderschaft", "team"}:
             return True
@@ -66,6 +67,15 @@ def hidden_from_lists(member):
     if "nrw" in text:
         return True
     return False
+
+
+def is_rank_member(member):
+    """Nur echte Fraktions-Ränge 12 → 01. Kein NRW, kein Bot, kein ohne Rang."""
+    if member is None or getattr(member, "bot", False):
+        return False
+    if hidden_from_lists(member):
+        return False
+    return highest_rank(member) is not None
 
 ROSTER_AREAS = ["Bar", "Tür", "Service", "Büro", "Nicht eingeteilt"]
 

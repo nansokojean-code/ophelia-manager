@@ -126,14 +126,17 @@ async def embed_abmeldung(guild, db):
     if not rows:
         e.description = "_keine Abmeldungen_"
     else:
+        from ranks import is_rank_member
         parts = []
         for r in rows:
             m = guild.get_member(r["user_id"])
+            if m and not is_rank_member(m):
+                continue
             who = display_line(m) if m else f"User {r['user_id']}"
             parts.append(f"**{who}**")
             parts.append(r["reason"] or "kein Grund")
             parts.append("")
-        e.description = "\n".join(parts).strip()[:4000]
+        e.description = "\n".join(parts).strip()[:4000] if parts else "_keine Abmeldungen_"
     e.set_footer(text=now_footer())
     return e
 
@@ -232,7 +235,12 @@ async def embed_sanktionen(guild, db):
 
     def name(uid):
         m = guild.get_member(uid)
-        return display_line(m) if m else f"`{uid}`"
+        if not m:
+            return f"`{uid}`"
+        from ranks import is_rank_member, hidden_from_lists
+        if hidden_from_lists(m) or not is_rank_member(m):
+            return None
+        return display_line(m)
 
     e = discord.Embed(title="Aktive Sanktionen", color=0x2B2D31)
     parts = ["**Verwarnungen**"]
@@ -242,7 +250,10 @@ async def embed_sanktionen(guild, db):
             if w["user_id"] in seen:
                 continue
             seen.add(w["user_id"])
-            parts.append(f"{name(w['user_id'])} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
+            nm = name(w['user_id'])
+            if not nm:
+                continue
+            parts.append(f"{nm} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
     else:
         parts.append("_keine_")
 
@@ -251,7 +262,10 @@ async def embed_sanktionen(guild, db):
     if active:
         for s in active:
             until = f" | bis {s['until_text']}" if s["until_text"] else ""
-            parts.append(f"{name(s['user_id'])} | {s['kind']}{until} | {s['reason']}")
+            nm = name(s['user_id'])
+            if not nm:
+                continue
+            parts.append(f"{nm} | {s['kind']}{until} | {s['reason']}")
     else:
         parts.append("_keine_")
 
@@ -413,7 +427,7 @@ async def embed_aktivitaet(guild, db):
     cur = await db.execute("SELECT user_id, stamped_at FROM activity ORDER BY stamped_at")
     rows = await cur.fetchall()
     done_ids = {r["user_id"] for r in rows}
-    staff = visible_members(guild)
+    staff = staff_members(guild)  # nur Rang 12–01, kein NRW
     here = [m for m in staff if m.id in done_ids]
     missing = [m for m in staff if m.id not in done_ids]
     e = discord.Embed(title="Aktivitätscheck", color=0x2B2D31)

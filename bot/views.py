@@ -2,7 +2,7 @@ from datetime import datetime
 
 import discord
 
-from ranks import ROSTER_AREAS, can_blacklist, can_route, is_high, is_leader, is_officer, is_staff, rank_names
+from ranks import ROSTER_AREAS, can_blacklist, can_route, is_high, is_leader, is_officer, is_staff, is_rank_member, rank_names
 
 
 def stamp():
@@ -10,6 +10,13 @@ def stamp():
 
 
 LEAD_MSG = "Nur Leadership kann das ausführen."
+ONLY_RANK_MSG = "Nur Personen mit Rang 12–01 (kein NRW-Team)."
+
+
+def require_rank_target(person):
+    """True wenn Person ein Fraktions-Rang 12–01 hat und kein NRW."""
+    return is_rank_member(person)
+
 
 
 def ping_leaderschaft(guild):
@@ -616,7 +623,10 @@ class AbmeldungView(discord.ui.View):
     async def abmelden(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not select.values:
             return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
-        await interaction.response.send_modal(AbmeldenModal(self.bot, select.values[0]))
+        person = select.values[0]
+        if not require_rank_target(person):
+            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
+        await interaction.response.send_modal(AbmeldenModal(self.bot, person))
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Abmeldung löschen (nur Leitung)", custom_id="abm:delwho")
     async def loeschen(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
@@ -716,7 +726,10 @@ class SanktionView(discord.ui.View):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         if not select.values:
             return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
-        await interaction.response.send_modal(SanktionModal(self.bot, select.values[0]))
+        person = select.values[0]
+        if not require_rank_target(person):
+            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
+        await interaction.response.send_modal(SanktionModal(self.bot, person))
 
 
 class AusruestungView(discord.ui.View):
@@ -1317,6 +1330,8 @@ class LootView(discord.ui.View):
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Wer hat abgegeben?", custom_id="loot:who")
     async def who(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         user = select.values[0]
+        if not require_rank_target(user):
+            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
         await interaction.response.send_modal(LootModal(self.bot, user))
 
 
@@ -1364,7 +1379,10 @@ class AbgabeView(discord.ui.View):
     async def who(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(AbgabeModal(self.bot, select.values[0]))
+        person = select.values[0]
+        if not require_rank_target(person):
+            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
+        await interaction.response.send_modal(AbgabeModal(self.bot, person))
 
 
 class KasseModal(discord.ui.Modal, title="Fraktionskasse"):
