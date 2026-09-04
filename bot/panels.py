@@ -217,15 +217,6 @@ async def embed_katalog(db):
 
 async def embed_sanktionen(guild, db):
     cur = await db.execute(
-        "SELECT user_id, reason, created_at FROM warnings ORDER BY id DESC LIMIT 15"
-    )
-    warns = await cur.fetchall()
-    warn_count = defaultdict(int)
-    cur = await db.execute("SELECT user_id, COUNT(*) AS c FROM warnings GROUP BY user_id")
-    for r in await cur.fetchall():
-        warn_count[r["user_id"]] = r["c"]
-
-    cur = await db.execute(
         "SELECT user_id, kind, reason, until_text FROM sanctions WHERE active = 1 ORDER BY id DESC"
     )
     active = await cur.fetchall()
@@ -235,19 +226,7 @@ async def embed_sanktionen(guild, db):
         return display_line(m) if m else f"`{uid}`"
 
     e = discord.Embed(title="Aktive Sanktionen", color=0x2B2D31)
-    parts = ["**Verwarnungen**"]
-    if warns:
-        seen = set()
-        for w in warns:
-            if w["user_id"] in seen:
-                continue
-            seen.add(w["user_id"])
-            parts.append(f"{name(w['user_id'])} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
-    else:
-        parts.append("_keine_")
-
-    parts.append("")
-    parts.append(f"**Laufende Sanktionen ({len(active)})**")
+    parts = [f"**Laufende Sanktionen ({len(active)})**"]
     if active:
         for s in active:
             until = f" | bis {s['until_text']}" if s["until_text"] else ""
