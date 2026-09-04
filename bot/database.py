@@ -184,9 +184,42 @@ async def init(db: aiosqlite.Connection):
         )
         await set_setting(db, "rules_seed", "2")
 
-    clear_inv = await get_setting(db, "lager_cleared", "0")
-    if clear_inv != "1":
-        await db.execute("DELETE FROM inventory")
+    # Lager einmalig mit den Gegenständen vom Bild befüllen
+    lager_seed = await get_setting(db, "lager_seed_v2", "0")
+    if lager_seed != "1":
+        seed_items = [
+            # Essen
+            ("Crunchy Chicken Burger", "Essen", 165),
+            ("Tiramisu", "Essen", 50),
+            ("Rinderfilet Steak", "Essen", 95),
+            ("Rumpsteak", "Essen", 90),
+            ("Pecan Pie Cake", "Essen", 50),
+            ("Rib Eye Steak", "Essen", 100),
+            ("Caesar Salat", "Essen", 80),
+            ("Pancakes", "Essen", 45),
+            ("Lachs", "Essen", 9),
+            ("Bachforelle", "Essen", 8),
+            # Trinken
+            ("Ayran Kirsch", "Trinken", 24),
+            ("Mineralwasser", "Trinken", 36),
+            ("Bubble Tea", "Trinken", 10),
+            ("Energy Drink", "Trinken", 24),
+            # Sonstiges
+            ("OG Kush Joint", "Sonstiges", 2),
+            ("GPS", "Sonstiges", 13),
+            ("Klebeband", "Sonstiges", 2),
+            ("Kupfererz", "Sonstiges", 51),
+            ("Sack", "Sonstiges", 5),
+            ("Schrott", "Sonstiges", 11),
+            ("Schere", "Sonstiges", 4),
+        ]
+        for name, kat, qty in seed_items:
+            await db.execute(
+                "INSERT INTO inventory(item, category, qty) VALUES(?, ?, ?) "
+                "ON CONFLICT(item) DO UPDATE SET category=excluded.category, qty=excluded.qty",
+                (name, kat, qty),
+            )
+        await set_setting(db, "lager_seed_v2", "1")
         await set_setting(db, "lager_cleared", "1")
 
     cur = await db.execute("SELECT COUNT(*) AS c FROM equipment_items")

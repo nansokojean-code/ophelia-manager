@@ -283,22 +283,39 @@ async def embed_ausruestung(guild, db):
     return e
 
 
+LAGER_KATS = ("Essen", "Trinken", "Sonstiges")
+
+
+def _norm_kat(raw):
+    t = (raw or "").strip().lower()
+    if t in {"essen", "food", "foods", "nahrung"}:
+        return "Essen"
+    if t in {"trinken", "drink", "drinks", "getränke", "getraenke"}:
+        return "Trinken"
+    return "Sonstiges"
+
+
 async def embed_lager(db):
-    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY category, item")
+    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY item")
     rows = await cur.fetchall()
-    grouped = defaultdict(list)
+    grouped = {k: [] for k in LAGER_KATS}
     for r in rows:
-        grouped[r["category"]].append(r)
+        kat = _norm_kat(r["category"])
+        grouped[kat].append(r)
 
     clean = []
-    for cat, items in grouped.items():
-        clean.append(f"**{cat}**")
-        for r in items:
-            clean.append(f"{r['item']}  —  **{r['qty']}**")
+    for cat in LAGER_KATS:
+        items = grouped[cat]
+        clean.append(f"**{cat} ({len(items)})**")
+        if items:
+            for r in sorted(items, key=lambda x: x["item"].lower()):
+                clean.append(f"• {r['item']}  —  **{r['qty']}**")
+        else:
+            clean.append("_leer_")
         clean.append("")
 
     cur = await db.execute(
-        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 3"
+        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 5"
     )
     logs = await cur.fetchall()
     clean.append("**Letzte Bewegung**")
@@ -311,7 +328,7 @@ async def embed_lager(db):
 
     e = discord.Embed(title="Lager", color=0x2B2D31)
     e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Bestand ändert sich bei jedem Klick"))
+    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
     return e
 
 
