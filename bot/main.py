@@ -350,19 +350,49 @@ async def daily_clock():
                     INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
                     VALUES(?, ?, ?, ?, ?, 1, ?)
                     """,
-                    (m.id, "REGEL 2", "50k nicht angemeldet/abgemeldet", None, bot.user.id, now.strftime("%d.%m.%Y %H:%M")),
+                    (
+                        m.id,
+                        "Nicht an-/abgemeldet (offen nach 18 Uhr)",
+                        "15k",
+                        None,
+                        bot.user.id,
+                        now.strftime("%d.%m.%Y %H:%M"),
+                    ),
                 )
             await bot.db.commit()
             if hit:
                 await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
-                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]), "Sanktionen")
+                await bot.log(
+                    g,
+                    "18:00 Offen → 15k Sanktion: " + ", ".join(m.mention for m in hit[:30]),
+                    "Sanktionen",
+                )
                 prow = await database.get_panel(bot.db, f"{g.id}:sanktionen")
-                sch = g.get_channel(prow["channel_id"]) if prow else discord.utils.find(lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(), g.text_channels)
+                sch = (
+                    g.get_channel(prow["channel_id"])
+                    if prow
+                    else discord.utils.find(
+                        lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(),
+                        g.text_channels,
+                    )
+                )
                 if sch:
                     for m in hit:
-                        e = discord.Embed(title="SANKTION 50k", color=0xC0392B)
-                        e.description = f"**Wer:** {m.mention}\n**Regel:** REGEL 2\n**Grund:** nicht angemeldet / nicht abgemeldet\n**Höhe:** 50k"
-                        await sch.send(content=f"# Sanktion\n{m.mention} — 50k", embed=e)
+                        cur = await bot.db.execute(
+                            "SELECT id FROM sanctions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+                            (m.id,),
+                        )
+                        row = await cur.fetchone()
+                        sid = row["id"] if row else "?"
+                        e = discord.Embed(title="Sanktion", color=0xC0392B)
+                        e.description = (
+                            f"**Wer:** {m.mention}\n"
+                            f"**Was:** Nicht an-/abgemeldet (offen nach 18 Uhr)\n"
+                            f"**Wie viel:** 15k\n"
+                            f"**Bis:** -"
+                        )
+                        e.set_footer(text=f"SID:{sid}")
+                        await sch.send(embed=e, view=views.SanktionPayView())
 
 
 @daily_clock.before_loop
