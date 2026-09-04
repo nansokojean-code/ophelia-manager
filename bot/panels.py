@@ -232,9 +232,9 @@ async def embed_sanktionen(guild, db):
             bis = s["until_text"] or "-"
             parts.append(
                 f"**Wer:** {name(s['user_id'])}\n"
-                f"**Regel:** {s['kind']}\n"
+                f"**Was:** {s['kind']}\n"
                 f"**Wie viel:** {s['reason']}\n"
-                f"**Bis wann:** {bis}"
+                f"**Bis:** {bis}"
             )
             parts.append("")
     else:

@@ -85,9 +85,9 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
-    regel = discord.ui.TextInput(label="Welche Regel", required=True, max_length=80)
+    was = discord.ui.TextInput(label="Was", required=True, max_length=80)
     wieviel = discord.ui.TextInput(label="Wie viel", required=True, max_length=80)
-    bis = discord.ui.TextInput(label="Bis wann", required=False, max_length=80)
+    bis = discord.ui.TextInput(label="Bis", required=False, max_length=80)
 
     def __init__(self, bot, person: discord.Member):
         super().__init__()
@@ -103,7 +103,7 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
             INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
             VALUES(?, ?, ?, ?, ?, 1, ?)
             """,
-            (uid, str(self.regel), str(self.wieviel), str(self.bis) or None, interaction.user.id, stamp()),
+            (uid, str(self.was), str(self.wieviel), str(self.bis) or None, interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
         cur = await self.bot.db.execute("SELECT last_insert_rowid() AS i")
@@ -111,16 +111,16 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
         e = discord.Embed(title="Sanktion", color=0xC0392B)
         e.description = (
             f"**Wer:** {self.person.mention}\n"
-            f"**Regel:** {self.regel}\n"
+            f"**Was:** {self.was}\n"
             f"**Wie viel:** {self.wieviel}\n"
-            f"**Bis wann:** {self.bis or '-'}"
+            f"**Bis:** {self.bis or '-'}"
         )
         e.set_footer(text=f"SID:{sid}")
         await interaction.channel.send(embed=e, view=SanktionPayView())
         await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
         await self.bot.log(
             interaction.guild,
-            f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.regel} – {self.wieviel}",
+            f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.was} – {self.wieviel}",
             "Sanktionen",
         )
         await interaction.response.send_message(f"Sanktion für {self.person.mention} gepostet.", ephemeral=True)
