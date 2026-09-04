@@ -2,7 +2,7 @@ from datetime import datetime
 
 import discord
 
-from ranks import ROSTER_AREAS, can_blacklist, can_route, is_high, is_leader, is_officer, is_staff, is_rank_member, rank_names
+from ranks import ROSTER_AREAS, can_blacklist, can_route, is_high, is_leader, is_officer, is_staff
 
 
 def stamp():
@@ -10,13 +10,6 @@ def stamp():
 
 
 LEAD_MSG = "Nur Leadership kann das ausführen."
-ONLY_RANK_MSG = "Nur Personen mit Rang 12–01 (kein NRW-Team)."
-
-
-def require_rank_target(person):
-    """True wenn Person ein Fraktions-Rang 12–01 hat und kein NRW."""
-    return is_rank_member(person)
-
 
 
 def ping_leaderschaft(guild):
@@ -31,129 +24,20 @@ def ping_leaderschaft(guild):
 
 
 def fancy_name(text: str) -> str:
-    """Kanal-Name im Stil 🔫︱𝐘𝐮𝐤𝐢-𝐍𝐚𝐧𝐬𝐤𝐨 aus dem Anzeigenamen."""
-    import re
-    import unicodedata
     out = []
-    for ch in str(text or ""):
+    for ch in text:
         o = ord(ch)
-        # schon mathematische Bold-Buchstaben behalten
-        if 0x1D400 <= o <= 0x1D7FF:
-            out.append(ch)
-            continue
         if 65 <= o <= 90:
             out.append(chr(0x1D400 + (o - 65)))
-            continue
-        if 97 <= o <= 122:
+        elif 97 <= o <= 122:
             out.append(chr(0x1D41A + (o - 97)))
-            continue
-        if 48 <= o <= 57:
+        elif 48 <= o <= 57:
             out.append(chr(0x1D7CE + (o - 48)))
-            continue
-        if ch in "-_ ":
+        elif ch in "-_ ":
             out.append("-" if ch == " " else ch)
+        else:
             continue
-        # Umlaute / Akzente → Basisbuchstabe
-        for c in unicodedata.normalize("NFKD", ch):
-            o2 = ord(c)
-            if 65 <= o2 <= 90:
-                out.append(chr(0x1D400 + (o2 - 65)))
-            elif 97 <= o2 <= 122:
-                out.append(chr(0x1D41A + (o2 - 97)))
-            elif 48 <= o2 <= 57:
-                out.append(chr(0x1D7CE + (o2 - 48)))
-    result = "".join(out)[:40].strip("-")
-    if len(result) < 2:
-        cleaned = re.sub(r"[^a-zA-Z0-9\-]", "", str(text or "").replace(" ", "-"))
-        result = cleaned[:40] or "User"
-    return result
-
-
-
-def find_guild_role(guild, chosen: str):
-    """Rolle auf dem Server finden – tolerant bei Leerzeichen/Doppelpunkt."""
-    import re
-    import unicodedata
-    if not chosen or not guild:
-        return None
-
-    def norm(s):
-        s = unicodedata.normalize("NFKC", str(s or ""))
-        s = s.replace("：", ":").replace("｜", "|")
-        s = re.sub(r"\s+", " ", s).strip().lower()
-        return s
-
-    target = norm(chosen)
-    # 1) exakt
-    role = discord.utils.get(guild.roles, name=chosen)
-    if role:
-        return role
-    # 2) normalisiert gleich
-    for r in guild.roles:
-        if norm(r.name) == target:
-            return r
-    # 3) "Rang 11" / "rang11" / "11er"
-    m = re.search(r"rang\s*(\d+)", target)
-    if m:
-        num = m.group(1)
-        for r in guild.roles:
-            rn = norm(r.name)
-            if re.search(rf"rang\s*{num}\b", rn) or re.search(rf"\b{num}er\b", rn):
-                return r
-    # 4) bekannte Namen ohne Nummer
-    aliases = {
-        "lieutenant": ("lieutenant", "8er"),
-        "enforcer": ("enforcer", "7er"),
-        "made member": ("made member", "6er"),
-        "soldier": ("soldier", "5er"),
-        "prospect": ("prospect", "4er"),
-        "recruit": ("recruit", "3er"),
-        "runner": ("runner", "2er"),
-        "associate": ("associate", "1er"),
-        "leaderschaft": ("leaderschaft",),
-        "it": ("it",),
-    }
-    for key, keys in aliases.items():
-        if any(k in target for k in keys) or key in target:
-            for r in guild.roles:
-                rn = norm(r.name)
-                if any(k in rn for k in keys):
-                    return r
-    # 5) Teilstring
-    for r in guild.roles:
-        rn = norm(r.name)
-        if target and (target in rn or rn in target):
-            return r
-    return None
-
-
-def guild_rank_options(guild):
-    """Select-Optionen aus echten Server-Rollen (Rang 12 → 1)."""
-    from ranks import RANK_ROLE_NAMES, rank_names
-    wanted = list(rank_names(guild) if guild else RANK_ROLE_NAMES) or list(RANK_ROLE_NAMES)
-    opts = []
-    used = set()
-    # zuerst konfigurierte Namen, gematcht auf echte Rollen
-    for name in wanted:
-        role = find_guild_role(guild, name) if guild else None
-        label = role.name if role else name
-        if label in used:
-            continue
-        used.add(label)
-        opts.append(discord.SelectOption(label=label[:100], value=label[:100]))
-    if opts:
-        return opts[:25]
-    # Fallback: alle Rollen die nach Rang aussehen
-    if guild:
-        scored = []
-        for r in guild.roles:
-            n = r.name.lower()
-            if any(x in n for x in ("rang", "lieutenant", "enforcer", "made member", "soldier", "prospect", "recruit", "runner", "associate", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er")):
-                scored.append(r.name)
-        for label in scored[:25]:
-            if label not in used:
-                opts.append(discord.SelectOption(label=label[:100], value=label[:100]))
-    return opts or [discord.SelectOption(label="keine Ränge gefunden", value="none")]
+    return "".join(out)[:40] or "User"
 
 
 async def lead_repost(interaction, bot, key):
@@ -185,34 +69,25 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
         self.person = person
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            text = f"{self.person.mention} | {self.von} – {self.bis} | {self.grund}"
-            await self.bot.db.execute(
-                """
-                INSERT INTO attendance(user_id, status, reason, updated_at)
-                VALUES(?, 'abgemeldet', ?, ?)
-                ON CONFLICT(user_id) DO UPDATE SET status='abgemeldet', reason=excluded.reason, updated_at=excluded.updated_at
-                """,
-                (self.person.id, text, stamp()),
-            )
-            await self.bot.db.commit()
-            await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
-            await self.bot.log(interaction.guild, text, "Abmeldung")
-            await interaction.response.send_message(f"{self.person.mention} ist abgemeldet.", ephemeral=True)
-        except Exception as exc:
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send(f"Fehler: {exc}", ephemeral=True)
-                else:
-                    await interaction.response.send_message(f"Fehler: {exc}", ephemeral=True)
-            except discord.HTTPException:
-                pass
+        text = f"{self.person.mention} | {self.von} – {self.bis} | {self.grund}"
+        await self.bot.db.execute(
+            """
+            INSERT INTO attendance(user_id, status, reason, updated_at)
+            VALUES(?, 'abgemeldet', ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET status='abgemeldet', reason=excluded.reason, updated_at=excluded.updated_at
+            """,
+            (self.person.id, text, stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
+        await self.bot.log(interaction.guild, text, "Abmeldung")
+        await interaction.response.send_message(f"{self.person.mention} ist abgemeldet.", ephemeral=True)
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
     kind = discord.ui.TextInput(label="Regel-Nr (z.B. 2)", required=True, max_length=80)
-    grund = discord.ui.TextInput(label="Wie viel", required=True, max_length=100)
     dauer = discord.ui.TextInput(label="Bis wann", required=False, max_length=80)
+    grund = discord.ui.TextInput(label="Wie viel / Extra", style=discord.TextStyle.paragraph, required=True, max_length=300)
 
     def __init__(self, bot, person: discord.Member):
         super().__init__()
@@ -241,11 +116,7 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
             f"**Bis:** {self.dauer or '-'}"
         )
         e.set_footer(text=f"SID:{sid}")
-        await interaction.channel.send(
-            content=f"# Sanktion\n{self.person.mention}",
-            embed=e,
-            view=SanktionPayView(),
-        )
+        await interaction.channel.send(embed=e, view=SanktionPayView())
         await self.bot.log(
             interaction.guild,
             f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.kind} – {self.grund}",
@@ -260,12 +131,8 @@ class SanktionPayView(discord.ui.View):
 
     @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
     async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Nur Rang 12–10, Leaderschaft, IT, NRW
-        if not is_high(interaction.user):
-            return await interaction.response.send_message(
-                "Nur Leadership (Rang 12–10 / Leaderschaft / IT) kann bezahlt markieren.",
-                ephemeral=True,
-            )
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
         sid = None
         if interaction.message.embeds:
             foot = interaction.message.embeds[0].footer.text or ""
@@ -490,24 +357,13 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
             (interaction.user.id, str(self.start), str(self.ende), str(self.grund), stamp()),
         )
         await self.bot.db.commit()
-        e = discord.Embed(title="Urlaub", color=0x3B82C4)
-        e.description = (
-            f"**Wer:** {interaction.user.mention}\n"
-            f"**Von:** {self.start}\n"
-            f"**Bis:** {self.ende}\n"
-            f"**Grund:** {self.grund}"
-        )
-        e.set_footer(text=stamp())
-        await interaction.channel.send(
-            content=f"# Urlaub\n{interaction.user.mention}",
-            embed=e,
-        )
+        await self.bot.repost_panel(interaction.guild, "urlaub")
         await self.bot.log(
             interaction.guild,
             f"{interaction.user.mention} Urlaub {self.start} – {self.ende}: {self.grund}",
             "Urlaub",
         )
-        await interaction.response.send_message("Urlaub als Nachricht eingetragen.", ephemeral=True)
+        await interaction.response.send_message("Urlaub eingetragen.", ephemeral=True)
 
 
 class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
@@ -536,82 +392,58 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
         await interaction.followup.send(f"Verschoben auf {zeit} Uhr.", ephemeral=True)
 
 
+async def set_dienst(bot, member, status):
+    await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (member.id,))
+    await bot.db.execute(
+        "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, ?, NULL, ?)",
+        (member.id, status, stamp()),
+    )
+    await bot.db.commit()
+    await bot.repost_panel(member.guild, "aufstellung")
+
+
 class DienstView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
 
-    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="dienst:an")
+    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf2:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
-        except discord.HTTPException:
-            return
-        try:
-            await self.bot.db.execute(
-                """
-                INSERT INTO attendance(user_id, status, reason, updated_at)
-                VALUES(?, 'angemeldet', NULL, ?)
-                ON CONFLICT(user_id) DO UPDATE SET status='angemeldet', reason=NULL, updated_at=excluded.updated_at
-                """,
-                (interaction.user.id, stamp()),
-            )
-            await self.bot.db.commit()
-            # Sofort in der Liste aktualisieren (gleiche Nachricht, kein Löschen)
-            await self.bot.refresh_panels(interaction.guild, ["aufstellung", "dienst"])
-            await interaction.followup.send("Du bist **angemeldet**. Stehst jetzt unter Angemeldet.", ephemeral=True)
-        except Exception as exc:
+            await set_dienst(self.bot, interaction.user, "angemeldet")
+            await interaction.followup.send("Angemeldet.", ephemeral=True)
+        except Exception as err:
             try:
-                await interaction.followup.send(f"Fehler beim Anmelden: {exc}", ephemeral=True)
-            except discord.HTTPException:
+                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
+            except Exception:
                 pass
 
-    @discord.ui.button(label="Aufstellung verschieben", style=discord.ButtonStyle.primary, custom_id="dienst:shift")
-    async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_high(interaction.user):
-            return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
-        await interaction.response.send_modal(AufstellungZeitModal(self.bot))
-
-    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="dienst:ab")
+    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf2:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             await interaction.response.defer(ephemeral=True)
-        except discord.HTTPException:
-            return
-        try:
-            await self.bot.db.execute(
-                """
-                INSERT INTO attendance(user_id, status, reason, updated_at)
-                VALUES(?, 'abgemeldet', 'Aufstellung', ?)
-                ON CONFLICT(user_id) DO UPDATE SET status='abgemeldet', reason='Aufstellung', updated_at=excluded.updated_at
-                """,
-                (interaction.user.id, stamp()),
-            )
-            await self.bot.db.commit()
-            await self.bot.refresh_panels(interaction.guild, ["aufstellung", "dienst"])
-            await interaction.followup.send("Du bist **abgemeldet**. Stehst jetzt unter Abgemeldet.", ephemeral=True)
-        except Exception as exc:
+            await set_dienst(self.bot, interaction.user, "abgemeldet")
+            await interaction.followup.send("Abgemeldet.", ephemeral=True)
+        except Exception as err:
             try:
-                await interaction.followup.send(f"Fehler beim Abmelden: {exc}", ephemeral=True)
-            except discord.HTTPException:
+                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
+            except Exception:
                 pass
 
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="dienst:refresh")
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf2:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_high(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.HTTPException:
-            return
-        try:
-            await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
-            await interaction.followup.send("Aufstellung aktualisiert.", ephemeral=True)
-        except Exception as exc:
-            try:
-                await interaction.followup.send(f"Fehler: {exc}", ephemeral=True)
-            except discord.HTTPException:
-                pass
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        await self.bot.repost_panel(interaction.guild, "aufstellung")
+        await interaction.followup.send("Liste neu.", ephemeral=True)
+
+    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf2:shift")
+    async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(AufstellungZeitModal(self.bot))
 
 
 class AbmeldungView(discord.ui.View):
@@ -621,40 +453,20 @@ class AbmeldungView(discord.ui.View):
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Wen abmelden?", custom_id="abm:who")
     async def abmelden(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-        if not select.values:
-            return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
-        person = select.values[0]
-        if not require_rank_target(person):
-            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
-        await interaction.response.send_modal(AbmeldenModal(self.bot, person))
+        await interaction.response.send_modal(AbmeldenModal(self.bot, select.values[0]))
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Abmeldung löschen (nur Leitung)", custom_id="abm:delwho")
     async def loeschen(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leitung darf Abmeldungen löschen.", ephemeral=True)
-        if not select.values:
-            return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
         person = select.values[0]
-        try:
-            await self.bot.db.execute(
-                """
-                INSERT INTO attendance(user_id, status, reason, updated_at)
-                VALUES(?, 'offen', NULL, ?)
-                ON CONFLICT(user_id) DO UPDATE SET status='offen', reason=NULL, updated_at=excluded.updated_at
-                """,
-                (person.id, stamp()),
-            )
-            await self.bot.db.commit()
-            await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
-            await interaction.response.send_message(f"Abmeldung von {person.mention} gelöscht.", ephemeral=True)
-        except Exception as exc:
-            try:
-                if interaction.response.is_done():
-                    await interaction.followup.send(f"Fehler: {exc}", ephemeral=True)
-                else:
-                    await interaction.response.send_message(f"Fehler: {exc}", ephemeral=True)
-            except discord.HTTPException:
-                pass
+        await self.bot.db.execute(
+            "UPDATE attendance SET status='offen', reason=NULL, updated_at=? WHERE user_id=?",
+            (stamp(), person.id),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
+        await interaction.response.send_message(f"Abmeldung von {person.mention} gelöscht.", ephemeral=True)
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="abm:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -674,18 +486,8 @@ class AufstellungView(discord.ui.View):
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="roster:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.HTTPException:
-            return
-        try:
-            await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
-            await interaction.followup.send("Liste aktualisiert.", ephemeral=True)
-        except Exception as exc:
-            try:
-                await interaction.followup.send(f"Fehler: {exc}", ephemeral=True)
-            except discord.HTTPException:
-                pass
+        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
+        await interaction.response.send_message("Liste aktualisiert.", ephemeral=True)
 
 
 class LagerView(discord.ui.View):
@@ -724,12 +526,21 @@ class SanktionView(discord.ui.View):
     async def add(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        if not select.values:
-            return await interaction.response.send_message("Keine Person gewählt.", ephemeral=True)
-        person = select.values[0]
-        if not require_rank_target(person):
-            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
-        await interaction.response.send_modal(SanktionModal(self.bot, person))
+        await interaction.response.send_modal(SanktionModal(self.bot, select.values[0]))
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Bezahlt → Person wählen", custom_id="san:paywho")
+    async def pay(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        uid = select.values[0].id
+        await self.bot.db.execute("UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,))
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
+        await interaction.response.send_message(f"{select.values[0].mention} als bezahlt markiert.", ephemeral=True)
+
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="san:refresh")
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await lead_repost(interaction, self.bot, "sanktionen")
 
 
 class AusruestungView(discord.ui.View):
@@ -929,30 +740,10 @@ class BlacklistDelModal(discord.ui.Modal, title="Von Blacklist nehmen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
-        target = str(self.name).strip()
-        await self.bot.db.execute("DELETE FROM blacklist WHERE name = ?", (target,))
+        await self.bot.db.execute("DELETE FROM blacklist WHERE name = ?", (str(self.name).strip(),))
         await self.bot.db.commit()
-        deleted = 0
-        try:
-            async for msg in interaction.channel.history(limit=80):
-                if msg.author.id != interaction.client.user.id:
-                    continue
-                blob = ((msg.content or "") + " " + " ".join(
-                    (emb.title or "") + " " + (emb.description or "") for emb in (msg.embeds or [])
-                )).lower()
-                if target.lower() in blob and "blacklist" in blob:
-                    try:
-                        await msg.delete()
-                        deleted += 1
-                    except discord.HTTPException:
-                        pass
-        except discord.HTTPException:
-            pass
         await self.bot.refresh_panels(interaction.guild, ["blacklist"])
-        await interaction.response.send_message(
-            f"Von der Blacklist genommen" + (f" ({deleted} Nachricht(en) gelöscht)." if deleted else "."),
-            ephemeral=True,
-        )
+        await interaction.response.send_message("Von der Blacklist genommen.", ephemeral=True)
 
 
 class RangPickView(discord.ui.View):
@@ -1036,14 +827,8 @@ class LootModal(discord.ui.Modal, title="Lootdrop abgeben"):
             (text, stamp()),
         )
         await self.bot.db.commit()
-        e = discord.Embed(title="Lootdrop", color=0x3B82C4)
-        e.description = f"**Wer:** {self.who.mention}\n**Abgabe:** {self.was}"
-        e.set_footer(text=stamp())
-        await interaction.channel.send(
-            content=f"# Lootdrop\n{self.who.mention}",
-            embed=e,
-        )
-        await interaction.response.send_message("Lootdrop als Nachricht eingetragen.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["lootdrop"])
+        await interaction.response.send_message("Lootdrop eingetragen.", ephemeral=True)
 
 
 class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
@@ -1063,16 +848,8 @@ class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
             (body, stamp()),
         )
         await self.bot.db.commit()
-        e = discord.Embed(title="Routenkontrolle", color=0x3B82C4)
-        e.description = (
-            f"**Wer:** {self.wer}\n"
-            f"**Wie viele:** {self.wieviele}\n"
-            f"**Route:** {self.route}\n"
-            f"**Typ:** {self.typ}"
-        )
-        e.set_footer(text=stamp())
-        await interaction.channel.send(content="# Routenkontrolle", embed=e)
-        await interaction.response.send_message("Kontrolle als Nachricht eingetragen.", ephemeral=True)
+        await self.bot.refresh_panels(interaction.guild, ["routecheck"])
+        await interaction.response.send_message("Kontrolle eingetragen.", ephemeral=True)
 
 
 class BlacklistView(discord.ui.View):
@@ -1094,22 +871,11 @@ class BlacklistView(discord.ui.View):
 
 
 class RoleConfirmView(discord.ui.View):
-    def __init__(self, rank_list=None, guild=None):
+    def __init__(self):
         super().__init__(timeout=None)
-        if guild is not None:
-            opts = guild_rank_options(guild)
-        else:
-            from ranks import RANK_ROLE_NAMES
-            names = list(rank_list) if rank_list else list(RANK_ROLE_NAMES)
-            names = [n for n in names if n][:25]
-            opts = [discord.SelectOption(label=n[:100], value=n[:100]) for n in names]
-            if not opts:
-                opts = [discord.SelectOption(label="keine Ränge", value="none")]
-        sel = discord.ui.Select(
-            placeholder="Rolle wählen → wird sofort vergeben",
-            custom_id="role:reqpick",
-            options=opts,
-        )
+        from ranks import RANK_ROLE_NAMES
+        opts = [discord.SelectOption(label=n[:100], value=n) for n in RANK_ROLE_NAMES[:25]]
+        sel = discord.ui.Select(placeholder="Rolle wählen", custom_id="role:reqpick", options=opts)
         sel.callback = self._picked
         self.add_item(sel)
 
@@ -1117,9 +883,16 @@ class RoleConfirmView(discord.ui.View):
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         chosen = interaction.data["values"][0]
-        if chosen == "none":
-            return await interaction.response.send_message("Keine Ränge konfiguriert.", ephemeral=True)
+        e = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(title="Rollenanfrage")
+        e.clear_fields()
+        e.add_field(name="Gewählt", value=chosen, inline=False)
+        await interaction.message.edit(embed=e)
+        await interaction.response.send_message(f"**{chosen}** gewählt. Jetzt Bestätigen.", ephemeral=True)
 
+    @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.success, custom_id="role:reqok")
+    async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_high(interaction.user):
+            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         if not interaction.message.embeds:
             return await interaction.response.send_message("Keine Anfrage.", ephemeral=True)
         e = interaction.message.embeds[0]
@@ -1129,86 +902,26 @@ class RoleConfirmView(discord.ui.View):
                 uid = int(e.footer.text.split("UID:")[1].split()[0])
             except ValueError:
                 uid = None
-        if not uid:
-            return await interaction.response.send_message("User-ID fehlt in der Anfrage.", ephemeral=True)
+        chosen = None
+        for f in e.fields:
+            if f.name == "Gewählt":
+                chosen = f.value
+        if not uid or not chosen:
+            return await interaction.response.send_message("Erst eine Rolle wählen.", ephemeral=True)
         member = interaction.guild.get_member(uid)
-        if not member:
-            return await interaction.response.send_message(
-                "User nicht gefunden (nicht mehr auf dem Server?).", ephemeral=True
-            )
-
-        role = find_guild_role(interaction.guild, chosen)
-        if role is None:
-            # letzte Chance: Liste der Rang-Rollen zeigen
-            sample = ", ".join(
-                r.name for r in interaction.guild.roles
-                if "rang" in r.name.lower() or any(x in r.name.lower() for x in ("8er", "7er", "lieutenant", "associate"))
-            )[:200]
-            return await interaction.response.send_message(
-                f"Rolle `{chosen}` nicht gefunden.\nServer-Rollen z.B.: {sample or '—'}",
-                ephemeral=True,
-            )
-
-        from ranks import rank_names, RANK_ROLE_NAMES
-        allowed = set(rank_names(interaction.guild)) | set(RANK_ROLE_NAMES)
-        to_remove = []
-        for r in member.roles:
-            if r == role:
-                continue
-            if r.name in allowed:
-                to_remove.append(r)
-                continue
-            rn = r.name.lower()
-            if any(
-                k in rn
-                for k in (
-                    "rang", "8er", "7er", "6er", "5er", "4er", "3er", "2er", "1er",
-                    "lieutenant", "enforcer", "prospect", "recruit", "runner",
-                    "associate", "soldier", "made member",
-                )
-            ):
-                to_remove.append(r)
+        role = discord.utils.get(interaction.guild.roles, name=chosen)
+        if not member or not role:
+            return await interaction.response.send_message("User oder Rolle nicht gefunden. Name muss exakt stimmen.", ephemeral=True)
         try:
-            if to_remove:
-                await member.remove_roles(*to_remove, reason=f"Rollenwechsel durch {interaction.user}")
-            await member.add_roles(role, reason=f"Rollenanfrage durch {interaction.user}")
+            await member.add_roles(role, reason=f"Anfrage bestätigt von {interaction.user}")
         except discord.Forbidden:
-            return await interaction.response.send_message(
-                "Bot darf die Rolle nicht geben. Bot-Rolle muss **über** den Rang-Rollen stehen "
-                f"(Bot unter der Rolle **{role.name}**?).",
-                ephemeral=True,
-            )
-        except discord.HTTPException as exc:
-            return await interaction.response.send_message(f"Fehler beim Rollen setzen: {exc}", ephemeral=True)
-
-        try:
-            bot = interaction.client
-            if hasattr(bot, "refresh_panels"):
-                await bot.refresh_panels(
-                    interaction.guild,
-                    ["mitarbeiter", "rang", "memberliste", "dienst", "aufstellung"],
-                )
-            if hasattr(bot, "log"):
-                await bot.log(
-                    interaction.guild,
-                    f"{interaction.user.mention} gab {member.mention} **{role.name}** (Anfrage)",
-                    "Rollen",
-                )
-        except Exception:
-            pass
-
-        try:
-            await interaction.message.edit(
-                content=f"# Rolle gegeben\n{member.mention} → **{role.name}** von {interaction.user.mention}",
-                embed=None,
-                view=None,
-            )
-        except discord.HTTPException:
-            pass
-        await interaction.response.send_message(
-            f"Rolle **{role.name}** an {member.mention} vergeben.",
-            ephemeral=True,
+            return await interaction.response.send_message("Bot darf die Rolle nicht geben (Reihenfolge).", ephemeral=True)
+        await interaction.message.edit(
+            content=f"# Rolle gegeben\n{member.mention} → **{chosen}** von {interaction.user.mention}",
+            embed=None,
+            view=None,
         )
+        await interaction.response.send_message("Rolle vergeben.", ephemeral=True)
 
 
 class RolleBestaetigenPanelView(discord.ui.View):
@@ -1227,7 +940,7 @@ class RolleBestaetigenPanelView(discord.ui.View):
         await interaction.channel.send(
             content=f"# Rollenanfrage\n{person.mention}",
             embed=e,
-            view=RoleConfirmView(guild=interaction.guild),
+            view=RoleConfirmView(),
         )
         await interaction.response.send_message("Unten Rolle wählen, dann Bestätigen.", ephemeral=True)
 
@@ -1276,7 +989,7 @@ class RolleAnfrageView(discord.ui.View):
         await ziel.send(
             content=f"# Rollenanfrage\n{ping_leaderschaft(interaction.guild)}",
             embed=e,
-            view=RoleConfirmView(guild=interaction.guild),
+            view=RoleConfirmView(),
         )
         await interaction.response.send_message(f"Anfrage ist in {ziel.mention}.", ephemeral=True)
 
@@ -1308,10 +1021,8 @@ class ClipAntragView(discord.ui.View):
                 break
         if cat is None:
             cat = await interaction.guild.create_category("Kill-Logs")
-        raw = interaction.user.display_name or interaction.user.global_name or interaction.user.name
+        raw = interaction.user.display_name or interaction.user.name
         safe = fancy_name(raw)
-        if not safe or safe == "User":
-            safe = fancy_name(interaction.user.name) or "User"
         channel = await interaction.guild.create_text_channel(name=f"🔫︱{safe}", category=cat)
         await self.bot.db.execute(
             "INSERT INTO clip_channels(user_id, channel_id) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET channel_id=excluded.channel_id",
@@ -1330,8 +1041,6 @@ class LootView(discord.ui.View):
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Wer hat abgegeben?", custom_id="loot:who")
     async def who(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         user = select.values[0]
-        if not require_rank_target(user):
-            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
         await interaction.response.send_modal(LootModal(self.bot, user))
 
 
@@ -1379,10 +1088,7 @@ class AbgabeView(discord.ui.View):
     async def who(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        person = select.values[0]
-        if not require_rank_target(person):
-            return await interaction.response.send_message(ONLY_RANK_MSG, ephemeral=True)
-        await interaction.response.send_modal(AbgabeModal(self.bot, person))
+        await interaction.response.send_modal(AbgabeModal(self.bot, select.values[0]))
 
 
 class KasseModal(discord.ui.Modal, title="Fraktionskasse"):

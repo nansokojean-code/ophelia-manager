@@ -182,8 +182,6 @@ class ClubBot(commands.Bot):
         for name in targets:
             if name == "aktivitaet":
                 continue
-            if name not in mapping:
-                continue
             key, embed_coro, view = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
             if not row:
@@ -193,22 +191,13 @@ class ClubBot(commands.Bot):
                 continue
             try:
                 msg = await ch.fetch_message(row["message_id"])
-            except (discord.NotFound, discord.HTTPException):
-                # Alte Nachricht weg → neu posten, damit Buttons wieder gehen
-                try:
-                    await self.post_panel(ch, key)
-                except Exception:
-                    pass
+            except discord.NotFound:
                 continue
+            embed = await embed_coro
             try:
-                embed = await embed_coro
-                await msg.edit(content=f"# {embed.title or key}", embed=embed, view=view)
+                await msg.edit(embed=embed, view=view)
             except discord.HTTPException:
-                # Edit fehlgeschlagen → neu posten
-                try:
-                    await self.repost_panel(guild, key)
-                except Exception:
-                    pass
+                pass
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
@@ -337,11 +326,7 @@ async def daily_clock():
             delta = 99
         if delta >= 4:
             for g in bot.guilds:
-                try:
-                    await bot.repost_panel(g, "aktivitaet")
-                    await bot.log(g, "00:00 Aktivitätscheck (alle 4 Tage).", "Aktivitaet")
-                except Exception as e:
-                    print("aktivitaet repost error", g.id, e)
+                await bot.repost_panel(g, "aktivitaet")
             await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
         from panels import staff_members
@@ -464,6 +449,20 @@ async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice
         f"Ophelia Manager hat **{panel.value}** hier gepostet. Die Liste bleibt aktuell.",
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
+async def cmd_anmelden(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await views.set_dienst(bot, interaction.user, "angemeldet")
+    await interaction.followup.send("Angemeldet.", ephemeral=True)
+
+
+@bot.tree.command(name="abmelden", description="Bei der Aufstellung abmelden")
+async def cmd_abmelden(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await views.set_dienst(bot, interaction.user, "abgemeldet")
+    await interaction.followup.send("Abgemeldet.", ephemeral=True)
 
 
 @bot.tree.command(name="logkanal", description="Log-Kanal festlegen")

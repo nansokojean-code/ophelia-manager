@@ -56,10 +56,9 @@ def has_god(member):
 
 
 def hidden_from_lists(member):
-    """NRW-Team, IT, Leaderschaft-only usw. nie in Listen / Auswahl."""
     for r in member.roles:
         n = r.name.lower()
-        if "nrw" in n or "frakverwaltung" in n or "analyst" in n or "kickbot" in n:
+        if "nrw" in n or "frakverwaltung" in n or "analyst" in n:
             return True
         if n.strip() in {"it", "leaderschaft", "team"}:
             return True
@@ -67,15 +66,6 @@ def hidden_from_lists(member):
     if "nrw" in text:
         return True
     return False
-
-
-def is_rank_member(member):
-    """Nur echte Fraktions-Ränge 12 → 01. Kein NRW, kein Bot, kein ohne Rang."""
-    if member is None or getattr(member, "bot", False):
-        return False
-    if hidden_from_lists(member):
-        return False
-    return highest_rank(member) is not None
 
 ROSTER_AREAS = ["Bar", "Tür", "Service", "Büro", "Nicht eingeteilt"]
 
@@ -125,7 +115,10 @@ def can_route(member):
 
 
 def is_leader(member):
-    return is_high(member)
+    """10–12 + NRW/Leaderschaft + 8er (Lieutenant) dürfen Sanktionen, bezahlen, drücken usw."""
+    if is_high(member):
+        return True
+    return highest_rank(member) == "Lieutenant (8er)"
 
 
 def is_officer(member):
@@ -148,43 +141,28 @@ def can_blacklist(member):
 
 
 def highest_rank(member):
-    """Hoechster Rang (12 -> 1). Nur Leute mit einem dieser Raenge stehen in der Aufstellung."""
     names = member_role_names(member)
-    configured = rank_names(member.guild)
-    for rank in configured:
+    for rank in rank_names(member.guild):
         if rank in names:
             return rank
-    low_map = {n.lower().strip(): n for n in names}
-    for rank in configured:
-        rl = rank.lower().strip()
-        if rl in low_map:
-            return rank
-        for ln in low_map:
-            if rl and (rl in ln or ln in rl):
-                return rank
     low = {n.lower() for n in names}
     aliases = [
-        ("Rang 12:", ("rang 12", "r12", "12er")),
-        ("Rang 11:", ("rang 11", "r11", "11er")),
-        ("Rang 10:", ("rang 10", "r10", "10er")),
-        ("Rang 9:", ("rang 9", "r9", "9er")),
-        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant", "r8")),
-        ("Enforcer (7er)", ("rang 7", "7er", "enforcer", "r7")),
-        ("Made Member (6er)", ("rang 6", "6er", "made member", "r6")),
-        ("Soldier (5er)", ("rang 5", "5er", "soldier", "r5")),
-        ("Prospect (4er)", ("rang 4", "4er", "prospect", "r4")),
-        ("Recruit (3er)", ("rang 3", "3er", "recruit", "r3")),
-        ("Runner (2er)", ("rang 2", "2er", "runner", "r2")),
-        ("Associate (1er)", ("rang 1", "1er", "associate", "r1")),
+        ("Rang 12:", ("rang 12",)),
+        ("Rang 11:", ("rang 11",)),
+        ("Rang 10:", ("rang 10",)),
+        ("Rang 9:", ("rang 9",)),
+        ("Lieutenant (8er)", ("rang 8", "8er", "lieutenant")),
+        ("Enforcer (7er)", ("rang 7", "7er", "enforcer")),
+        ("Made Member (6er)", ("rang 6", "6er", "made member")),
+        ("Soldier (5er)", ("rang 5", "5er", "soldier")),
+        ("Prospect (4er)", ("rang 4", "4er", "prospect")),
+        ("Recruit (3er)", ("rang 3", "3er", "recruit")),
+        ("Runner (2er)", ("rang 2", "2er", "runner")),
+        ("Associate (1er)", ("rang 1", "1er", "associate")),
     ]
     for official, keys in aliases:
         for n in low:
             if any(k in n for k in keys):
-                if official in configured or not configured:
-                    return official
-                for rank in configured:
-                    if any(k in rank.lower() for k in keys):
-                        return rank
                 return official
     return None
 
