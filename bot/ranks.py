@@ -50,19 +50,39 @@ def _norm(name):
     return " ".join(str(name).lower().split())
 
 
+def _has_nrw_role(member):
+    """True wenn irgendeine Rolle 'nrw' im Namen hat."""
+    for r in member.roles:
+        if "nrw" in (r.name or "").lower():
+            return True
+    return False
+
+
 def has_god(member):
+    """Volle Rechte: NRW-Rollen (beliebiger Name mit nrw) + feste GOD_ROLES."""
+    if _has_nrw_role(member):
+        return True
     names = {_norm(r.name) for r in member.roles}
     return bool(names & {_norm(x) for x in GOD_ROLES})
 
 
 def hidden_from_lists(member):
+    """NRW-Team: kann alles, erscheint aber in keinem Panel / keiner Liste."""
+    if _has_nrw_role(member):
+        return True
     for r in member.roles:
-        n = r.name.lower()
-        if "nrw" in n or "frakverwaltung" in n or "analyst" in n:
+        n = (r.name or "").lower()
+        if "frakverwaltung" in n or "analyst" in n:
             return True
         if n.strip() in {"it", "leaderschaft", "team"}:
             return True
-    text = f"{member.display_name} {member.name} {member.nick or ''}".lower()
+    parts = [
+        member.display_name or "",
+        member.name or "",
+        member.nick or "",
+        getattr(member, "global_name", None) or "",
+    ]
+    text = " ".join(parts).lower()
     if "nrw" in text:
         return True
     return False
@@ -115,13 +135,28 @@ def can_route(member):
 
 
 def is_leader(member):
-    """10–12 + NRW/Leaderschaft + 8er (Lieutenant) dürfen Sanktionen, bezahlen, drücken usw."""
+    """10–12 + NRW/Leaderschaft + 8er (Lieutenant)."""
     if is_high(member):
         return True
     return highest_rank(member) == "Lieutenant (8er)"
 
 
+def can_sanction(member):
+    """Nur Rang 12–10, 8er und NRW-Team dürfen Sanktionen vergeben/bezahlen."""
+    if _has_nrw_role(member):
+        return True
+    rank = highest_rank(member)
+    return rank in {
+        "Rang 12:",
+        "Rang 11:",
+        "Rang 10:",
+        "Lieutenant (8er)",
+    }
+
+
 def is_officer(member):
+    if has_god(member):
+        return True
     names = member_role_names(member)
     return bool(names & cfg(member.guild)["officers"]) or member.guild_permissions.administrator
 

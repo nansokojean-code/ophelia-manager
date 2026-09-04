@@ -229,12 +229,18 @@ async def embed_sanktionen(guild, db):
     parts = [f"**Laufende Sanktionen ({len(active)})**"]
     if active:
         for s in active:
-            until = f" | bis {s['until_text']}" if s["until_text"] else ""
-            parts.append(f"{name(s['user_id'])} | {s['kind']}{until} | {s['reason']}")
+            bis = s["until_text"] or "-"
+            parts.append(
+                f"**Wer:** {name(s['user_id'])}\n"
+                f"**Regel:** {s['kind']}\n"
+                f"**Wie viel:** {s['reason']}\n"
+                f"**Bis wann:** {bis}"
+            )
+            parts.append("")
     else:
         parts.append("_keine_")
 
-    e.description = "\n".join(parts)
+    e.description = "\n".join(parts).strip()
     e.set_footer(text=now_footer())
     return e
 

@@ -2,7 +2,7 @@ from datetime import datetime
 
 import discord
 
-from ranks import ROSTER_AREAS, can_blacklist, can_route, is_high, is_leader, is_officer, is_staff
+from ranks import ROSTER_AREAS, can_blacklist, can_route, can_sanction, is_high, is_leader, is_officer, is_staff
 
 
 def stamp():
@@ -85,7 +85,7 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
-    was = discord.ui.TextInput(label="Was (Regel / Grund)", required=True, max_length=80)
+    regel = discord.ui.TextInput(label="Welche Regel", required=True, max_length=80)
     wieviel = discord.ui.TextInput(label="Wie viel", required=True, max_length=80)
     bis = discord.ui.TextInput(label="Bis wann", required=False, max_length=80)
 
@@ -95,15 +95,15 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
         self.person = person
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        if not can_sanction(interaction.user):
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
         uid = self.person.id
         await self.bot.db.execute(
             """
             INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
             VALUES(?, ?, ?, ?, ?, 1, ?)
             """,
-            (uid, str(self.was), str(self.wieviel), str(self.bis) or None, interaction.user.id, stamp()),
+            (uid, str(self.regel), str(self.wieviel), str(self.bis) or None, interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
         cur = await self.bot.db.execute("SELECT last_insert_rowid() AS i")
@@ -111,16 +111,16 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
         e = discord.Embed(title="Sanktion", color=0xC0392B)
         e.description = (
             f"**Wer:** {self.person.mention}\n"
-            f"**Was:** {self.was}\n"
+            f"**Regel:** {self.regel}\n"
             f"**Wie viel:** {self.wieviel}\n"
-            f"**Bis:** {self.bis or '-'}"
+            f"**Bis wann:** {self.bis or '-'}"
         )
         e.set_footer(text=f"SID:{sid}")
         await interaction.channel.send(embed=e, view=SanktionPayView())
         await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
         await self.bot.log(
             interaction.guild,
-            f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.was} – {self.wieviel}",
+            f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.regel} – {self.wieviel}",
             "Sanktionen",
         )
         await interaction.response.send_message(f"Sanktion für {self.person.mention} gepostet.", ephemeral=True)
@@ -132,8 +132,8 @@ class SanktionPayView(discord.ui.View):
 
     @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
     async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        if not can_sanction(interaction.user):
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
         sid = None
         if interaction.message.embeds:
             foot = interaction.message.embeds[0].footer.text or ""
@@ -525,14 +525,14 @@ class SanktionView(discord.ui.View):
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Sanktion → Person wählen", custom_id="san:who")
     async def add(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        if not can_sanction(interaction.user):
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
         await interaction.response.send_modal(SanktionModal(self.bot, select.values[0]))
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Bezahlt → Person wählen", custom_id="san:paywho")
     async def pay(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        if not can_sanction(interaction.user):
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
         uid = select.values[0].id
         await self.bot.db.execute("UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,))
         await self.bot.db.commit()
@@ -697,8 +697,8 @@ class BezahltModal(discord.ui.Modal, title="Sanktion bezahlt"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        if not can_sanction(interaction.user):
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
         try:
             uid = int(str(self.person_id).strip())
         except ValueError:
