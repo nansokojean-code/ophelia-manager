@@ -170,9 +170,37 @@ async def init(db: aiosqlite.Connection):
             body TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS web_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            display_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            is_owner INTEGER NOT NULL DEFAULT 0,
+            must_change_password INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
         """
     )
     await db.commit()
+
+    # Owner aus WEB_PASSWORD anlegen, falls noch kein User existiert
+    import os
+    import hashlib
+    import secrets
+    from datetime import datetime as _dt
+
+    cur = await db.execute("SELECT COUNT(*) AS c FROM web_users")
+    if (await cur.fetchone())["c"] == 0:
+        owner_pw = os.getenv("WEB_PASSWORD") or "owner-change-me"
+        salt = secrets.token_hex(16)
+        pw_hash = hashlib.sha256(f"{salt}:{owner_pw}".encode()).hexdigest()
+        await db.execute(
+            "INSERT INTO web_users(username, display_name, password_hash, is_owner, must_change_password, created_at) "
+            "VALUES(?, ?, ?, 1, 0, ?)",
+            ("owner", "Owner", f"{salt}${pw_hash}", _dt.now().strftime("%d.%m.%Y %H:%M")),
+        )
+        await db.commit()
 
     seeded = await get_setting(db, "rules_seed", "0")
     if seeded != "2":
@@ -272,4 +300,69 @@ async def set_panel(db, name, channel_id, message_id):
         """,
         (name, channel_id, message_id),
     )
+    await db.commit()
+
+
+def hash_password(password: str, salt: str | None = None) -> str:
+    import hashlib
+    import secrets
+    if not salt:
+        salt = secrets.token_hex(16)
+    digest = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    return f"{salt}${digest}"
+
+
+def verify_password(password: str, stored: str) -> bool:
+    import hashlib
+    try:
+        salt, digest = stored.split("$", 1)
+    except ValueError:
+        return False
+    check = hashlib.sha256(f"{salt}:{password}".encode()).hexdigest()
+    return check == digest
+
+
+async def get_web_user(db, username: str):
+    cur = await db.execute("SELECT * FROM web_users WHERE username = ?", (username.lower().strip(),))
+    return await cur.fetchone()
+
+
+async def get_web_user_by_id(db, user_id: int):
+    cur = await db.execute("SELECT * FROM web_users WHERE id = ?", (user_id,))
+    return await cur.fetchone()
+
+
+async def list_web_users(db):
+    cur = await db.execute(
+        "SELECT id, username, display_name, is_owner, must_change_password, created_at FROM web_users ORDER BY is_owner DESC, username"
+    )
+    return await cur.fetchall()
+
+
+async def create_web_user(db, username: str, display_name: str, password: str, is_owner: bool = False, must_change: bool = True):
+    from datetime import datetime
+    username = username.lower().strip()
+    pw = hash_password(password)
+    await db.execute(
+        "INSERT INTO web_users(username, display_name, password_hash, is_owner, must_change_password, created_at) "
+        "VALUES(?, ?, ?, ?, ?, ?)",
+        (username, display_name.strip(), pw, 1 if is_owner else 0, 1 if must_change else 0, datetime.now().strftime("%d.%m.%Y %H:%M")),
+    )
+    await db.commit()
+
+
+async def set_web_password(db, user_id: int, password: str, clear_must_change: bool = True):
+    pw = hash_password(password)
+    if clear_must_change:
+        await db.execute(
+            "UPDATE web_users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
+            (pw, user_id),
+        )
+    else:
+        await db.execute("UPDATE web_users SET password_hash = ? WHERE id = ?", (pw, user_id))
+    await db.commit()
+
+
+async def delete_web_user(db, user_id: int):
+    await db.execute("DELETE FROM web_users WHERE id = ? AND is_owner = 0", (user_id,))
     await db.commit()
