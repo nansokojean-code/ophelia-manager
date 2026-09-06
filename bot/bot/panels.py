@@ -217,15 +217,6 @@ async def embed_katalog(db):
 
 async def embed_sanktionen(guild, db):
     cur = await db.execute(
-        "SELECT user_id, reason, created_at FROM warnings ORDER BY id DESC LIMIT 15"
-    )
-    warns = await cur.fetchall()
-    warn_count = defaultdict(int)
-    cur = await db.execute("SELECT user_id, COUNT(*) AS c FROM warnings GROUP BY user_id")
-    for r in await cur.fetchall():
-        warn_count[r["user_id"]] = r["c"]
-
-    cur = await db.execute(
         "SELECT user_id, kind, reason, until_text FROM sanctions WHERE active = 1 ORDER BY id DESC"
     )
     active = await cur.fetchall()
@@ -235,27 +226,21 @@ async def embed_sanktionen(guild, db):
         return display_line(m) if m else f"`{uid}`"
 
     e = discord.Embed(title="Aktive Sanktionen", color=0x2B2D31)
-    parts = ["**Verwarnungen**"]
-    if warns:
-        seen = set()
-        for w in warns:
-            if w["user_id"] in seen:
-                continue
-            seen.add(w["user_id"])
-            parts.append(f"{name(w['user_id'])} | {warn_count[w['user_id']]} Warnung(en) | zuletzt: {w['reason']}")
-    else:
-        parts.append("_keine_")
-
-    parts.append("")
-    parts.append(f"**Laufende Sanktionen ({len(active)})**")
+    parts = [f"**Laufende Sanktionen ({len(active)})**"]
     if active:
         for s in active:
-            until = f" | bis {s['until_text']}" if s["until_text"] else ""
-            parts.append(f"{name(s['user_id'])} | {s['kind']}{until} | {s['reason']}")
+            bis = s["until_text"] or "-"
+            parts.append(
+                f"**Wer:** {name(s['user_id'])}\n"
+                f"**Was:** {s['kind']}\n"
+                f"**Wie viel:** {s['reason']}\n"
+                f"**Bis:** {bis}"
+            )
+            parts.append("")
     else:
         parts.append("_keine_")
 
-    e.description = "\n".join(parts)
+    e.description = "\n".join(parts).strip()
     e.set_footer(text=now_footer())
     return e
 
@@ -298,22 +283,39 @@ async def embed_ausruestung(guild, db):
     return e
 
 
+LAGER_KATS = ("Essen", "Trinken", "Sonstiges")
+
+
+def _norm_kat(raw):
+    t = (raw or "").strip().lower()
+    if t in {"essen", "food", "foods", "nahrung"}:
+        return "Essen"
+    if t in {"trinken", "drink", "drinks", "getränke", "getraenke"}:
+        return "Trinken"
+    return "Sonstiges"
+
+
 async def embed_lager(db):
-    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY category, item")
+    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY item")
     rows = await cur.fetchall()
-    grouped = defaultdict(list)
+    grouped = {k: [] for k in LAGER_KATS}
     for r in rows:
-        grouped[r["category"]].append(r)
+        kat = _norm_kat(r["category"])
+        grouped[kat].append(r)
 
     clean = []
-    for cat, items in grouped.items():
-        clean.append(f"**{cat}**")
-        for r in items:
-            clean.append(f"{r['item']}  —  **{r['qty']}**")
+    for cat in LAGER_KATS:
+        items = grouped[cat]
+        clean.append(f"**{cat} ({len(items)})**")
+        if items:
+            for r in sorted(items, key=lambda x: x["item"].lower()):
+                clean.append(f"• {r['item']}  —  **{r['qty']}**")
+        else:
+            clean.append("_leer_")
         clean.append("")
 
     cur = await db.execute(
-        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 3"
+        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 5"
     )
     logs = await cur.fetchall()
     clean.append("**Letzte Bewegung**")
@@ -326,7 +328,7 @@ async def embed_lager(db):
 
     e = discord.Embed(title="Lager", color=0x2B2D31)
     e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Bestand ändert sich bei jedem Klick"))
+    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
     return e
 
 

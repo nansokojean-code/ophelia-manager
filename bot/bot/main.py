@@ -182,8 +182,6 @@ class ClubBot(commands.Bot):
         for name in targets:
             if name == "aktivitaet":
                 continue
-            if name not in mapping:
-                continue
             key, embed_coro, view = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
             if not row:
@@ -193,22 +191,13 @@ class ClubBot(commands.Bot):
                 continue
             try:
                 msg = await ch.fetch_message(row["message_id"])
-            except (discord.NotFound, discord.HTTPException):
-                # Alte Nachricht weg → neu posten, damit Buttons wieder gehen
-                try:
-                    await self.post_panel(ch, key)
-                except Exception:
-                    pass
+            except discord.NotFound:
                 continue
+            embed = await embed_coro
             try:
-                embed = await embed_coro
-                await msg.edit(content=f"# {embed.title or key}", embed=embed, view=view)
+                await msg.edit(embed=embed, view=view)
             except discord.HTTPException:
-                # Edit fehlgeschlagen → neu posten
-                try:
-                    await self.repost_panel(guild, key)
-                except Exception:
-                    pass
+                pass
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
@@ -361,19 +350,49 @@ async def daily_clock():
                     INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
                     VALUES(?, ?, ?, ?, ?, 1, ?)
                     """,
-                    (m.id, "REGEL 2", "50k nicht angemeldet/abgemeldet", None, bot.user.id, now.strftime("%d.%m.%Y %H:%M")),
+                    (
+                        m.id,
+                        "Nicht an-/abgemeldet (offen nach 18 Uhr)",
+                        "15k",
+                        "bis morgen 19 Uhr",
+                        bot.user.id,
+                        now.strftime("%d.%m.%Y %H:%M"),
+                    ),
                 )
             await bot.db.commit()
             if hit:
                 await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
-                await bot.log(g, "18:00 Offen ohne Abmeldung → 50k: " + ", ".join(m.mention for m in hit[:30]), "Sanktionen")
+                await bot.log(
+                    g,
+                    "18:00 Offen → 15k Sanktion: " + ", ".join(m.mention for m in hit[:30]),
+                    "Sanktionen",
+                )
                 prow = await database.get_panel(bot.db, f"{g.id}:sanktionen")
-                sch = g.get_channel(prow["channel_id"]) if prow else discord.utils.find(lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(), g.text_channels)
+                sch = (
+                    g.get_channel(prow["channel_id"])
+                    if prow
+                    else discord.utils.find(
+                        lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(),
+                        g.text_channels,
+                    )
+                )
                 if sch:
                     for m in hit:
-                        e = discord.Embed(title="SANKTION 50k", color=0xC0392B)
-                        e.description = f"**Wer:** {m.mention}\n**Regel:** REGEL 2\n**Grund:** nicht angemeldet / nicht abgemeldet\n**Höhe:** 50k"
-                        await sch.send(content=f"# Sanktion\n{m.mention} — 50k", embed=e)
+                        cur = await bot.db.execute(
+                            "SELECT id FROM sanctions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+                            (m.id,),
+                        )
+                        row = await cur.fetchone()
+                        sid = row["id"] if row else "?"
+                        e = discord.Embed(title="Sanktion", color=0xC0392B)
+                        e.description = (
+                            f"**Wer:** {m.mention}\n"
+                            f"**Was:** Nicht an-/abgemeldet (offen nach 18 Uhr)\n"
+                            f"**Wie viel:** 15k\n"
+                            f"**Bis:** bis morgen 19 Uhr"
+                        )
+                        e.set_footer(text=f"SID:{sid}")
+                        await sch.send(embed=e, view=views.SanktionPayView())
 
 
 @daily_clock.before_loop
@@ -460,6 +479,20 @@ async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice
         f"Ophelia Manager hat **{panel.value}** hier gepostet. Die Liste bleibt aktuell.",
         ephemeral=True,
     )
+
+
+@bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
+async def cmd_anmelden(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await views.set_dienst(bot, interaction.user, "angemeldet")
+    await interaction.followup.send("Angemeldet.", ephemeral=True)
+
+
+@bot.tree.command(name="abmelden", description="Bei der Aufstellung abmelden")
+async def cmd_abmelden(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    await views.set_dienst(bot, interaction.user, "abgemeldet")
+    await interaction.followup.send("Abgemeldet.", ephemeral=True)
 
 
 @bot.tree.command(name="logkanal", description="Log-Kanal festlegen")
