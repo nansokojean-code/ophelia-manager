@@ -67,14 +67,12 @@ def has_god(member):
 
 
 def hidden_from_lists(member):
-    """NRW-Team: kann alles, erscheint aber in keinem Panel / keiner Liste."""
+    """Nur NRW-Beobachter aus Listen. Rang 12-1 bleibt sichtbar (auch mit Leaderschaft/IT)."""
     if _has_nrw_role(member):
         return True
     for r in member.roles:
         n = (r.name or "").lower()
-        if "frakverwaltung" in n or "analyst" in n:
-            return True
-        if n.strip() in {"it", "leaderschaft", "team"}:
+        if "nrw" in n or "frakverwaltung" in n:
             return True
     parts = [
         member.display_name or "",
@@ -135,21 +133,26 @@ def can_route(member):
 
 
 def is_leader(member):
-    """10–12 + NRW/Leaderschaft + 8er (Lieutenant)."""
+    """Rang 12–8 + NRW/Leaderschaft. Für Aktualisieren/Verschieben Aufstellung etc."""
     if is_high(member):
         return True
-    return highest_rank(member) == "Lieutenant (8er)"
+    rank = highest_rank(member)
+    return rank in {
+        "Rang 9:",
+        "Lieutenant (8er)",
+    }
 
 
 def can_sanction(member):
-    """Nur Rang 12–10, 8er und NRW-Team dürfen Sanktionen vergeben/bezahlen."""
-    if _has_nrw_role(member):
+    """Rang 12, 11, 10, 9, 8 und NRW dürfen Sanktionen schreiben."""
+    if _has_nrw_role(member) or has_god(member):
         return True
     rank = highest_rank(member)
     return rank in {
         "Rang 12:",
         "Rang 11:",
         "Rang 10:",
+        "Rang 9:",
         "Lieutenant (8er)",
     }
 

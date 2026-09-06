@@ -96,7 +96,7 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not can_sanction(interaction.user):
-            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         uid = self.person.id
         await self.bot.db.execute(
             """
@@ -133,7 +133,7 @@ class SanktionPayView(discord.ui.View):
     @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
     async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not can_sanction(interaction.user):
-            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         sid = None
         if interaction.message.embeds:
             foot = interaction.message.embeds[0].footer.text or ""
@@ -387,8 +387,10 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not is_high(interaction.user):
-            return await interaction.response.send_message(LEAD_MSG, ephemeral=True)
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message(
+                "Nur Rang 12–8 / NRW kann die Aufstellung verschieben.", ephemeral=True
+            )
         zeit = str(self.zeit).strip()
         import database as dbmod
         from panels import ping_ophelia
@@ -447,7 +449,9 @@ class DienstView(discord.ui.View):
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf2:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Nur Rang 12–8 / NRW kann aktualisieren.", ephemeral=True
+            )
         await interaction.response.defer(ephemeral=True)
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         await interaction.followup.send("Liste neu.", ephemeral=True)
@@ -455,7 +459,9 @@ class DienstView(discord.ui.View):
     @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf2:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await interaction.response.send_message(
+                "Nur Rang 12–8 / NRW kann verschieben.", ephemeral=True
+            )
         await interaction.response.send_modal(AufstellungZeitModal(self.bot))
 
 
@@ -538,13 +544,13 @@ class SanktionView(discord.ui.View):
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Sanktion → Person wählen", custom_id="san:who")
     async def add(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not can_sanction(interaction.user):
-            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         await interaction.response.send_modal(SanktionModal(self.bot, select.values[0]))
 
     @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Bezahlt → Person wählen", custom_id="san:paywho")
     async def pay(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
         if not can_sanction(interaction.user):
-            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         uid = select.values[0].id
         await self.bot.db.execute("UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,))
         await self.bot.db.commit()
@@ -710,7 +716,7 @@ class BezahltModal(discord.ui.Modal, title="Sanktion bezahlt"):
 
     async def on_submit(self, interaction: discord.Interaction):
         if not can_sanction(interaction.user):
-            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–10, 8er und NRW.", ephemeral=True)
+            return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         try:
             uid = int(str(self.person_id).strip())
         except ValueError:

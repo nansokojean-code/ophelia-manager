@@ -354,7 +354,7 @@ async def daily_clock():
                         m.id,
                         "Nicht an-/abgemeldet (offen nach 18 Uhr)",
                         "15k",
-                        None,
+                        "bis morgen 19 Uhr",
                         bot.user.id,
                         now.strftime("%d.%m.%Y %H:%M"),
                     ),
@@ -389,7 +389,7 @@ async def daily_clock():
                             f"**Wer:** {m.mention}\n"
                             f"**Was:** Nicht an-/abgemeldet (offen nach 18 Uhr)\n"
                             f"**Wie viel:** 15k\n"
-                            f"**Bis:** -"
+                            f"**Bis:** bis morgen 19 Uhr"
                         )
                         e.set_footer(text=f"SID:{sid}")
                         await sch.send(embed=e, view=views.SanktionPayView())
