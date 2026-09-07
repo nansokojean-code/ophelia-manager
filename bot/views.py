@@ -408,23 +408,13 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
 
 
 async def set_dienst(bot, member, status):
-    """Anmelden/Abmelden: Status setzen, Liste aktualisieren (ohne Nachricht zu löschen)."""
-    guild = getattr(member, "guild", None)
+    await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (member.id,))
     await bot.db.execute(
-        """
-        INSERT INTO attendance(user_id, status, reason, updated_at)
-        VALUES(?, ?, NULL, ?)
-        ON CONFLICT(user_id) DO UPDATE SET
-            status = excluded.status,
-            reason = NULL,
-            updated_at = excluded.updated_at
-        """,
+        "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, ?, NULL, ?)",
         (member.id, status, stamp()),
     )
     await bot.db.commit()
-    if guild:
-        # Nur Embed aktualisieren – Nachricht + Buttons bleiben stehen
-        await bot.refresh_panels(guild, ["aufstellung", "dienst"])
+    await bot.repost_panel(member.guild, "aufstellung")
 
 
 class DienstView(discord.ui.View):
@@ -463,7 +453,7 @@ class DienstView(discord.ui.View):
                 "Nur Rang 12–8 / NRW kann aktualisieren.", ephemeral=True
             )
         await interaction.response.defer(ephemeral=True)
-        await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
+        await self.bot.repost_panel(interaction.guild, "aufstellung")
         await interaction.followup.send("Liste neu.", ephemeral=True)
 
     @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf2:shift")
