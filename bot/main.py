@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-08-interaction-v3"
+BUILD_ID = "2026-09-09-setup-custom-panel-v4"
 import asyncio
 import os
 import sys
@@ -521,15 +521,61 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 @bot.tree.command(name="setup", description="Eine Live-Liste in diesen Kanal setzen")
 @app_commands.describe(panel="Welche Liste soll hier stehen?")
 @app_commands.choices(panel=[app_commands.Choice(name=n, value=n) for n in SETUP_PANELS])
-async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice[str]):
+async def setup_cmd(interaction: discord.Interaction, panel: str):
     if not is_leader(interaction.user):
+        if interaction.response.is_done():
+            return await interaction.followup.send("Nur Leitung.", ephemeral=True)
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
-    await bot.post_panel(interaction.channel, panel.value)
-    await interaction.followup.send(
-        f"Ophelia Manager hat **{panel.value}** hier gepostet. Die Liste bleibt aktuell.",
-        ephemeral=True,
-    )
+
+    # Discord kann nach alten Deploys noch einen veralteten Choice-Wert senden.
+    # Deshalb niemals direkt mit dem Payload in post_panel gehen.
+    raw = str(panel or "").strip()
+    normalized = raw.lower().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "custom-panel": "bosslager",
+        "custompanel": "bosslager",
+        "boss-menü-lager": "bosslager",
+        "boss-menu-lager": "bosslager",
+        "bosslager": "bosslager",
+        "unsere-route": "routen",
+        "route": "routen",
+    }
+    key = aliases.get(normalized, normalized.replace("-", ""))
+
+    # Exakte aktuelle Werte bevorzugen.
+    if raw.lower() in SETUP_PANELS:
+        key = raw.lower()
+    elif normalized in SETUP_PANELS:
+        key = normalized
+
+    if key not in SETUP_PANELS:
+        text = ", ".join(f"`{x}`" for x in SETUP_PANELS)
+        msg = (
+            f"Die alte Panel-Option **{raw or 'unbekannt'}** ist nicht mehr gültig. "
+            f"Öffne `/setup` bitte neu und wähle eines der aktuellen Panels:\n{text}"
+        )
+        if interaction.response.is_done():
+            return await interaction.followup.send(msg, ephemeral=True)
+        return await interaction.response.send_message(msg, ephemeral=True)
+
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        await bot.post_panel(interaction.channel, key)
+        await interaction.followup.send(
+            f"Ophelia Manager hat **{key}** hier gepostet. Die Liste bleibt aktuell.",
+            ephemeral=True,
+        )
+    except (discord.NotFound, discord.InteractionResponded):
+        # Das Panel selbst wurde ggf. bereits gepostet; alte/abgelaufene Interaction
+        # soll nicht als sichtbarer Fehler im Discord landen.
+        return
+    except KeyError:
+        # Zusätzliche Absicherung gegen alte Slash-Command-Payloads.
+        await interaction.followup.send(
+            "Diese alte Panel-Auswahl existiert nicht mehr. Bitte `/setup` neu öffnen.",
+            ephemeral=True,
+        )
 
 
 @bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
