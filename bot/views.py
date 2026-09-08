@@ -1290,12 +1290,15 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
         route_id = cur.lastrowid
         await self.bot.db.commit()
 
-        route_text = (
-            f"## Unsere Route\n"
-            f"**{route_name}**\n"
-            f"Menge / Abgabe: {menge}\n"
-            f"Abgeben bis: {bis}"
+        # Route als eigene Embed-Nachricht posten – im gleichen Stil wie eine Sanktion.
+        # Das Steuerungs-Panel selbst enthält weiterhin nur Überschrift + Buttons.
+        route_embed = discord.Embed(title="Unsere Route", color=0x2B2D31)
+        route_embed.description = (
+            f"**Route:** {route_name}\n"
+            f"**Menge / Abgabe:** {menge}\n"
+            f"**Abgeben bis:** {bis}"
         )
+        route_embed.set_footer(text=f"RID:{route_id}")
         # Falls das aktuelle Panel noch aus einer älteren Version als Embed/Tabelle
         # existiert, sofort auf eine reine Button-Nachricht umstellen.
         if self.panel_message is not None:
@@ -1308,7 +1311,7 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
             except discord.HTTPException:
                 pass
 
-        posted = await interaction.channel.send(route_text)
+        posted = await interaction.channel.send(embed=route_embed)
 
         # Nachrichten-ID merken, damit 'Löschen' auch die gepostete Route entfernt.
         try:
