@@ -335,14 +335,31 @@ async def embed_lager(db):
 async def embed_boss_lager(db):
     cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY item")
     rows = await cur.fetchall()
-    grouped = {k: [] for k in LAGER_KATS}
+
+    # Kategorien sind im Boss-Lager frei anlegbar. Leere Kategorien bleiben sichtbar.
+    cur = await db.execute("SELECT name FROM boss_inventory_categories ORDER BY rowid")
+    cat_rows = await cur.fetchall()
+    categories = [r["name"] for r in cat_rows if str(r["name"]).strip()]
+
+    # Falls alte Daten Kategorien enthalten, die noch nicht in der Kategorietabelle stehen,
+    # werden sie trotzdem angezeigt.
     for r in rows:
-        kat = _norm_kat(r["category"])
-        grouped[kat].append(r)
+        cat = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
+        if not any(cat.lower() == existing.lower() for existing in categories):
+            categories.append(cat)
+
+    if not categories:
+        categories = ["Sonstiges"]
+
+    grouped = {cat: [] for cat in categories}
+    for r in rows:
+        raw = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
+        cat = next((c for c in categories if c.lower() == raw.lower()), raw)
+        grouped.setdefault(cat, []).append(r)
 
     clean = []
-    for cat in LAGER_KATS:
-        items = grouped[cat]
+    for cat in categories:
+        items = grouped.get(cat, [])
         clean.append(f"**{cat} ({len(items)})**")
         if items:
             for r in sorted(items, key=lambda x: x["item"].lower()):
@@ -365,7 +382,7 @@ async def embed_boss_lager(db):
 
     e = discord.Embed(title="Boss Menü Lager", color=0x2B2D31)
     e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
+    e.set_footer(text=now_footer("Kategorien: " + " · ".join(categories)))
     return e
 
 

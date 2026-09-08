@@ -347,10 +347,10 @@ class BossLagerModal(discord.ui.Modal):
 class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
     item = discord.ui.TextInput(label="Name", required=True, max_length=80)
     kategorie = discord.ui.TextInput(
-        label="Kategorie (Essen / Trinken / Sonstiges)",
+        label="Kategorie",
         required=True,
         max_length=40,
-        default="Sonstiges",
+        placeholder="z. B. Waffen / Westen / Sonstiges",
     )
     menge = discord.ui.TextInput(label="Startbestand", required=True, max_length=8, default="0")
 
@@ -359,13 +359,26 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
         try:
             qty = int(str(self.menge).strip())
         except ValueError:
             return await interaction.response.send_message("Startbestand muss eine Zahl sein.", ephemeral=True)
-        from panels import _norm_kat
         name = str(self.item).strip()
-        kat = _norm_kat(str(self.kategorie))
+        kat = str(self.kategorie).strip()
+        if not name or not kat:
+            return await interaction.response.send_message("Name und Kategorie dürfen nicht leer sein.", ephemeral=True)
+
+        await self.bot.db.execute(
+            "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, ?)",
+            (kat, stamp()),
+        )
+        cur = await self.bot.db.execute(
+            "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
+        )
+        saved_cat = await cur.fetchone()
+        kat = saved_cat["name"] if saved_cat else kat
         await self.bot.db.execute(
             "INSERT OR REPLACE INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
             (name, kat, qty),
@@ -374,6 +387,39 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         await self.bot.refresh_panels(interaction.guild, ["bosslager"])
         await interaction.response.send_message(
             f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).", ephemeral=True
+        )
+
+
+class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
+    kategorie = discord.ui.TextInput(
+        label="Kategoriename", required=True, max_length=40, placeholder="z. B. Waffen"
+    )
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        kat = str(self.kategorie).strip()
+        if not kat:
+            return await interaction.response.send_message("Kategorie darf nicht leer sein.", ephemeral=True)
+        cur = await self.bot.db.execute(
+            "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
+        )
+        if await cur.fetchone():
+            return await interaction.response.send_message(
+                f"Die Kategorie **{kat}** gibt es bereits.", ephemeral=True
+            )
+        await self.bot.db.execute(
+            "INSERT INTO boss_inventory_categories(name, created_at) VALUES(?, ?)", (kat, stamp())
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["bosslager"])
+        await interaction.response.send_message(
+            f"Kategorie **{kat}** wurde angelegt und wird jetzt im Boss Menü Lager angezeigt.",
+            ephemeral=True,
         )
 
 
@@ -648,6 +694,12 @@ class BossLagerView(discord.ui.View):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
         await interaction.response.send_modal(BossLagerNeuModal(self.bot))
+
+    @discord.ui.button(label="Kategorie anlegen", style=discord.ButtonStyle.secondary, custom_id="bosslager:newcat")
+    async def neue_kategorie(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(BossLagerKategorieModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="bosslager:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -84,6 +84,11 @@ async def init(db: aiosqlite.Connection):
             qty INTEGER NOT NULL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS boss_inventory_categories (
+            name TEXT PRIMARY KEY COLLATE NOCASE,
+            created_at TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS boss_inventory_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item TEXT NOT NULL,
@@ -186,6 +191,19 @@ async def init(db: aiosqlite.Connection):
         );
         """
     )
+    # Boss-Lager Kategorien initialisieren und vorhandene Kategorien übernehmen
+    for _cat in ("Essen", "Trinken", "Sonstiges"):
+        await db.execute(
+            "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, datetime('now'))",
+            (_cat,),
+        )
+    await db.execute(
+        "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) "
+        "SELECT DISTINCT category, datetime('now') FROM boss_inventory "
+        "WHERE category IS NOT NULL AND trim(category) <> ''"
+    )
+    await db.commit()
+
     await db.commit()
 
     seeded = await get_setting(db, "rules_seed", "0")
