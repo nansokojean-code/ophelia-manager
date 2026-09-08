@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-setup-custom-panel-v5-hard-alias"
+BUILD_ID = "2026-09-09-setup-v6-no-stale-choice"
 import asyncio
 import os
 import sys
@@ -538,9 +538,18 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         )
 
 
+async def setup_panel_autocomplete(interaction: discord.Interaction, current: str):
+    current = (current or "").lower().strip()
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in SETUP_PANELS
+        if current in name.lower()
+    ][:25]
+
+
 @bot.tree.command(name="setup", description="Eine Live-Liste in diesen Kanal setzen")
 @app_commands.describe(panel="Welche Liste soll hier stehen?")
-@app_commands.choices(panel=[app_commands.Choice(name=n, value=n) for n in SETUP_PANELS])
+@app_commands.autocomplete(panel=setup_panel_autocomplete)
 async def setup_cmd(interaction: discord.Interaction, panel: str):
     if not is_leader(interaction.user):
         if interaction.response.is_done():
