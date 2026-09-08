@@ -19,6 +19,51 @@ async def finish_ephemeral(interaction: discord.Interaction, text: str):
     return await interaction.response.send_message(text, ephemeral=True)
 
 
+async def safe_defer(interaction: discord.Interaction) -> bool:
+    """Bestätigt eine Interaction sofort. Bei Discord-10062 wird die Aktion trotzdem ausgeführt."""
+    if interaction.response.is_done():
+        return True
+    try:
+        await interaction.response.defer(ephemeral=True)
+        return True
+    except discord.NotFound as exc:
+        if getattr(exc, "code", None) == 10062:
+            return False
+        raise
+
+
+async def safe_feedback(interaction: discord.Interaction, text: str, acknowledged: bool = True):
+    """Antwortet nur, wenn der Interaction-Token noch gültig ist; erzeugt keine 10062-Fehlermeldung."""
+    if not acknowledged:
+        return None
+    try:
+        return await finish_ephemeral(interaction, text)
+    except discord.NotFound as exc:
+        if getattr(exc, "code", None) == 10062:
+            return None
+        raise
+
+
+async def refresh_boss_message(bot, guild, source_message=None):
+    """Aktualisiert bevorzugt genau das Boss-Lager, auf dem geklickt wurde."""
+    from panels import embed_boss_lager
+    if source_message is not None:
+        try:
+            embed = await embed_boss_lager(bot.db)
+            await source_message.edit(embed=embed, view=BossLagerView(bot))
+            return True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+    updated = await bot.refresh_panels(guild, ["bosslager"])
+    if not updated:
+        try:
+            await bot.repost_panel(guild, "bosslager")
+            return True
+        except Exception:
+            return False
+    return True
+
+
 def ping_leaderschaft(guild):
     import unicodedata
     for r in guild.roles:
@@ -293,11 +338,12 @@ class BossLagerModal(discord.ui.Modal):
     menge = discord.ui.TextInput(label="Wie viel (Zahl)", required=True, max_length=8)
     wer = discord.ui.TextInput(label="Wer (leer = du)", required=False, max_length=40)
 
-    def __init__(self, bot, direction: int):
+    def __init__(self, bot, direction: int, source_message=None):
         title = "Reinlegen" if direction > 0 else "Rausnehmen"
         super().__init__(title=title)
         self.bot = bot
         self.direction = direction
+        self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if interaction.user.bot:
@@ -334,21 +380,19 @@ class BossLagerModal(discord.ui.Modal):
             return await interaction.response.send_message(
                 f"Nicht genug Bestand. Aktuell: {row['qty']}.", ephemeral=True
             )
-        await interaction.response.defer(ephemeral=True)
+        acknowledged = await safe_defer(interaction)
         await self.bot.db.execute("UPDATE boss_inventory SET qty = ? WHERE item = ?", (new_qty, item))
         await self.bot.db.execute(
             "INSERT INTO boss_inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
             (item, qty * self.direction, who, stamp()),
         )
         await self.bot.db.commit()
-        updated = await self.bot.refresh_panels(interaction.guild, ["bosslager"])
-        if not updated:
-            await self.bot.repost_panel(interaction.guild, "bosslager")
+        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
         verb = "reingelegt" if self.direction > 0 else "rausgenommen"
         line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
         await self.bot.log(interaction.guild, line, "Boss Menü Lager")
-        await interaction.followup.send(
-            f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.", ephemeral=True
+        await safe_feedback(
+            interaction, f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.", acknowledged
         )
 
 
@@ -362,9 +406,10 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
     )
     menge = discord.ui.TextInput(label="Startbestand", required=True, max_length=8, default="0")
 
-    def __init__(self, bot):
+    def __init__(self, bot, source_message=None):
         super().__init__()
         self.bot = bot
+        self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
@@ -378,7 +423,7 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         if not name or not kat:
             return await interaction.response.send_message("Name und Kategorie dürfen nicht leer sein.", ephemeral=True)
 
-        await interaction.response.defer(ephemeral=True)
+        acknowledged = await safe_defer(interaction)
         await self.bot.db.execute(
             "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, ?)",
             (kat, stamp()),
@@ -393,11 +438,9 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
             (name, kat, qty),
         )
         await self.bot.db.commit()
-        updated = await self.bot.refresh_panels(interaction.guild, ["bosslager"])
-        if not updated:
-            await self.bot.repost_panel(interaction.guild, "bosslager")
-        await interaction.followup.send(
-            f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).", ephemeral=True
+        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+        await safe_feedback(
+            interaction, f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).", acknowledged
         )
 
 
@@ -406,9 +449,10 @@ class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
         label="Kategoriename", required=True, max_length=40, placeholder="z. B. Waffen"
     )
 
-    def __init__(self, bot):
+    def __init__(self, bot, source_message=None):
         super().__init__()
         self.bot = bot
+        self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
@@ -416,24 +460,19 @@ class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
         kat = str(self.kategorie.value).strip()
         if not kat:
             return await interaction.response.send_message("Kategorie darf nicht leer sein.", ephemeral=True)
+        acknowledged = await safe_defer(interaction)
         cur = await self.bot.db.execute(
             "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
         )
         if await cur.fetchone():
-            return await interaction.response.send_message(
-                f"Die Kategorie **{kat}** gibt es bereits.", ephemeral=True
-            )
-        await interaction.response.defer(ephemeral=True)
+            return await safe_feedback(interaction, f"Die Kategorie **{kat}** gibt es bereits.", acknowledged)
         await self.bot.db.execute(
             "INSERT INTO boss_inventory_categories(name, created_at) VALUES(?, ?)", (kat, stamp())
         )
         await self.bot.db.commit()
-        updated = await self.bot.refresh_panels(interaction.guild, ["bosslager"])
-        if not updated:
-            await self.bot.repost_panel(interaction.guild, "bosslager")
-        await interaction.followup.send(
-            f"Kategorie **{kat}** wurde angelegt und wird jetzt im Boss Menü Lager angezeigt.",
-            ephemeral=True,
+        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+        await safe_feedback(
+            interaction, f"Kategorie **{kat}** wurde angelegt und wird jetzt im Boss Menü Lager angezeigt.", acknowledged
         )
 
 
@@ -500,6 +539,7 @@ class EquipModal(discord.ui.Modal, title="Ausrüstung setzen"):
         st = str(self.status).strip().lower()
         if st not in {"vollständig", "unvollständig", "ungeprüft"}:
             return await interaction.response.send_message("Status ungültig.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             """
             INSERT INTO equipment(user_id, status, missing) VALUES(?, ?, ?)
@@ -522,6 +562,7 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO vacations(user_id, start, end, reason, status, created_at) VALUES(?, ?, ?, ?, 'aktiv', ?)",
             (interaction.user.id, str(self.start), str(self.ende), str(self.grund), stamp()),
@@ -551,8 +592,8 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
         zeit = str(self.zeit).strip()
         import database as dbmod
         from panels import ping_ophelia
-        await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
         await interaction.response.defer(ephemeral=True)
+        await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:aufstellung")
         ch = interaction.guild.get_channel(row["channel_id"]) if row else interaction.channel
@@ -583,27 +624,23 @@ class DienstView(discord.ui.View):
 
     @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf2:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
+        acknowledged = await safe_defer(interaction)
         try:
-            await interaction.response.defer(ephemeral=True)
             await set_dienst(self.bot, interaction.user, "angemeldet")
-            await interaction.followup.send("Angemeldet.", ephemeral=True)
+            await safe_feedback(interaction, "Angemeldet.", acknowledged)
         except Exception as err:
-            try:
-                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
-            except Exception:
-                pass
+            print(f"Aufstellung anmelden Fehler für {interaction.user.id}: {err!r}")
+            await safe_feedback(interaction, "Anmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
     @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf2:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
+        acknowledged = await safe_defer(interaction)
         try:
-            await interaction.response.defer(ephemeral=True)
             await set_dienst(self.bot, interaction.user, "abgemeldet")
-            await interaction.followup.send("Abgemeldet.", ephemeral=True)
+            await safe_feedback(interaction, "Abgemeldet.", acknowledged)
         except Exception as err:
-            try:
-                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
-            except Exception:
-                pass
+            print(f"Aufstellung abmelden Fehler für {interaction.user.id}: {err!r}")
+            await safe_feedback(interaction, "Abmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf2:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -705,31 +742,31 @@ class BossLagerView(discord.ui.View):
 
     @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="bosslager:in")
     async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BossLagerModal(self.bot, +1))
+        await interaction.response.send_modal(BossLagerModal(self.bot, +1, interaction.message))
 
     @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="bosslager:out")
     async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(BossLagerModal(self.bot, -1))
+        await interaction.response.send_modal(BossLagerModal(self.bot, -1, interaction.message))
 
     @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="bosslager:new")
     async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(BossLagerNeuModal(self.bot))
+        await interaction.response.send_modal(BossLagerNeuModal(self.bot, interaction.message))
 
     @discord.ui.button(label="Kategorie anlegen", style=discord.ButtonStyle.secondary, custom_id="bosslager:newcat")
     async def neue_kategorie(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(BossLagerKategorieModal(self.bot))
+        await interaction.response.send_modal(BossLagerKategorieModal(self.bot, interaction.message))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="bosslager:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True)
-        await self.bot.repost_panel(interaction.guild, "bosslager")
-        await interaction.followup.send("Boss Menü Lager aktualisiert.", ephemeral=True)
+        acknowledged = await safe_defer(interaction)
+        await refresh_boss_message(self.bot, interaction.guild, interaction.message)
+        await safe_feedback(interaction, "Boss Menü Lager aktualisiert.", acknowledged)
 
 
 class SanktionView(discord.ui.View):
@@ -1040,6 +1077,7 @@ class LootModal(discord.ui.Modal, title="Lootdrop abgeben"):
         self.who = who
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         text = f"{self.who.mention} | {self.who.display_name}\n{self.was}"
         await self.bot.db.execute(
             "INSERT INTO lootdrops(body, created_at) VALUES(?, ?)",
@@ -1061,6 +1099,7 @@ class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         body = f"Wer: {self.wer}\nWie viele: {self.wieviele}\nRoute: {self.route}\nTyp: {self.typ}"
         await self.bot.db.execute(
             "INSERT INTO routechecks(body, created_at) VALUES(?, ?)",
@@ -1221,6 +1260,7 @@ class ClipAntragView(discord.ui.View):
     @discord.ui.button(label="Kill-Clip beantragen", style=discord.ButtonStyle.primary, custom_id="clip:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
         from rules_data import CLIP_RULES
+        acknowledged = await safe_defer(interaction)
         cur = await self.bot.db.execute(
             "SELECT channel_id FROM clip_channels WHERE user_id = ?",
             (interaction.user.id,),
@@ -1229,10 +1269,8 @@ class ClipAntragView(discord.ui.View):
         if row and not is_high(interaction.user):
             ch = interaction.guild.get_channel(row["channel_id"])
             if ch:
-                return await interaction.response.send_message(
-                    f"Du hast schon einen Clip-Kanal: {ch.mention}", ephemeral=True
-                )
-            return await interaction.response.send_message("Nur 1 Clip-Kanal. Leadership darf mehrere.", ephemeral=True)
+                return await safe_feedback(interaction, f"Du hast schon einen Clip-Kanal: {ch.mention}", acknowledged)
+            return await safe_feedback(interaction, "Nur 1 Clip-Kanal. Leadership darf mehrere.", acknowledged)
         cat = None
         for c in interaction.guild.categories:
             if c.name.lower() in {"kill-logs", "kill logs", "killlogs"}:
@@ -1249,7 +1287,7 @@ class ClipAntragView(discord.ui.View):
         )
         await self.bot.db.commit()
         await channel.send(f"{interaction.user.mention}\n{CLIP_RULES}")
-        await interaction.response.send_message(f"Kanal: {channel.mention}", ephemeral=True)
+        await safe_feedback(interaction, f"Kanal: {channel.mention}", acknowledged)
 
 
 class LootView(discord.ui.View):

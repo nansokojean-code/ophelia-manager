@@ -532,16 +532,16 @@ async def setup_cmd(interaction: discord.Interaction, panel: app_commands.Choice
 
 @bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
 async def cmd_anmelden(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    acknowledged = await views.safe_defer(interaction)
     await views.set_dienst(bot, interaction.user, "angemeldet")
-    await interaction.followup.send("Angemeldet.", ephemeral=True)
+    await views.safe_feedback(interaction, "Angemeldet.", acknowledged)
 
 
 @bot.tree.command(name="abmelden", description="Bei der Aufstellung abmelden")
 async def cmd_abmelden(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    acknowledged = await views.safe_defer(interaction)
     await views.set_dienst(bot, interaction.user, "abgemeldet")
-    await interaction.followup.send("Abgemeldet.", ephemeral=True)
+    await views.safe_feedback(interaction, "Abgemeldet.", acknowledged)
 
 
 @bot.tree.command(name="logkanal", description="Log-Kanal festlegen")
