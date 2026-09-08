@@ -151,42 +151,47 @@ class ClubBot(commands.Bot):
             pass
 
     async def refresh_panels(self, guild: discord.Guild, names=None):
+        # Builder werden absichtlich lazy erzeugt. In älteren Versionen wurden hier
+        # für *alle* Panels Coroutine-Objekte erstellt, obwohl nur ein Panel
+        # aktualisiert wurde. Das erzeugte unawaited-coroutine Warnungen und machte
+        # Panel-Updates unnötig instabil.
         mapping = {
-            "mitarbeiter": ("mitarbeiter", panels.embed_mitarbeiter(guild), None),
-            "memberliste": ("memberliste", panels.embed_memberliste(guild), None),
-            "rang": ("rang", panels.embed_rangsystem(guild), None),
-            "aufstellung": ("aufstellung", panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": ("dienst", panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
-            "katalog": ("katalog", panels.embed_katalog(self.db), None),
-            "sanktionen": ("sanktionen", panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
-            "ausruestung": ("ausruestung", panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
-            "lager": ("lager", panels.embed_lager(self.db), views.LagerView(self)),
-            "bosslager": ("bosslager", panels.embed_boss_lager(self.db), views.BossLagerView(self)),
-            "urlaub": ("urlaub", panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
-            "infos": ("infos", panels.embed_infos(self.db), None),
-            "arbeiter": ("arbeiter", panels.embed_arbeiter(guild, self.db), views.ArbeiterView(self)),
-            "tickets": ("tickets", panels.embed_tickets(), views.TicketView(self)),
-            "regeln": ("regeln", panels.embed_regeln(self.db), None),
-            "status": ("status", panels.embed_status(self.db), views.StatusView(self)),
-            "aktivitaet": ("aktivitaet", panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
-            "notizen": ("notizen", panels.embed_notizen(self.db), None),
-            "blacklist": ("blacklist", panels.embed_blacklist(self.db), views.BlacklistView(self)),
-            "pflicht": ("pflicht", panels.embed_pflicht(), None),
-            "routen": ("routen", panels.embed_routes(self.db), views.RouteView(self)),
-            "einkauf": ("einkauf", panels.embed_einkauf(self.db), views.EinkaufView(self)),
-            "routecheck": ("routecheck", panels.embed_routecheck(self.db), views.RouteCheckView(self)),
-            "lootdrop": ("lootdrop", panels.embed_lootdrop(self.db), views.LootView(self)),
-            "rollenanfrage": ("rollenanfrage", panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "rollenbestaetigen": ("rollenbestaetigen", panels.embed_rollenbestaetigen(), None),
-            "clipantrag": ("clipantrag", panels.embed_clipantrag(), views.ClipAntragView(self)),
-            "abgaben": ("abgaben", panels.embed_abgaben(self.db), views.AbgabeView(self)),
-            "kasse": ("kasse", panels.embed_kasse(self.db), views.KasseView(self)),
+            "mitarbeiter": ("mitarbeiter", lambda: panels.embed_mitarbeiter(guild), lambda: None),
+            "memberliste": ("memberliste", lambda: panels.embed_memberliste(guild), lambda: None),
+            "rang": ("rang", lambda: panels.embed_rangsystem(guild), lambda: None),
+            "aufstellung": ("aufstellung", lambda: panels.embed_aufstellung(guild, self.db), lambda: views.DienstView(self)),
+            "dienst": ("dienst", lambda: panels.embed_abmeldung(guild, self.db), lambda: views.AbmeldungView(self)),
+            "katalog": ("katalog", lambda: panels.embed_katalog(self.db), lambda: None),
+            "sanktionen": ("sanktionen", lambda: panels.embed_sanktionen(guild, self.db), lambda: views.SanktionView(self)),
+            "ausruestung": ("ausruestung", lambda: panels.embed_ausruestung(guild, self.db), lambda: views.AusruestungView(self)),
+            "lager": ("lager", lambda: panels.embed_lager(self.db), lambda: views.LagerView(self)),
+            "bosslager": ("bosslager", lambda: panels.embed_boss_lager(self.db), lambda: views.BossLagerView(self)),
+            "urlaub": ("urlaub", lambda: panels.embed_urlaub(guild, self.db), lambda: views.UrlaubView(self)),
+            "infos": ("infos", lambda: panels.embed_infos(self.db), lambda: None),
+            "arbeiter": ("arbeiter", lambda: panels.embed_arbeiter(guild, self.db), lambda: views.ArbeiterView(self)),
+            "tickets": ("tickets", lambda: panels.embed_tickets(), lambda: views.TicketView(self)),
+            "regeln": ("regeln", lambda: panels.embed_regeln(self.db), lambda: None),
+            "status": ("status", lambda: panels.embed_status(self.db), lambda: views.StatusView(self)),
+            "aktivitaet": ("aktivitaet", lambda: panels.embed_aktivitaet(guild, self.db), lambda: views.AktivitaetView(self)),
+            "notizen": ("notizen", lambda: panels.embed_notizen(self.db), lambda: None),
+            "blacklist": ("blacklist", lambda: panels.embed_blacklist(self.db), lambda: views.BlacklistView(self)),
+            "pflicht": ("pflicht", lambda: panels.embed_pflicht(), lambda: None),
+            "routen": ("routen", lambda: panels.embed_routes(self.db), lambda: views.RouteView(self)),
+            "einkauf": ("einkauf", lambda: panels.embed_einkauf(self.db), lambda: views.EinkaufView(self)),
+            "routecheck": ("routecheck", lambda: panels.embed_routecheck(self.db), lambda: views.RouteCheckView(self)),
+            "lootdrop": ("lootdrop", lambda: panels.embed_lootdrop(self.db), lambda: views.LootView(self)),
+            "rollenanfrage": ("rollenanfrage", lambda: panels.embed_rollenanfrage(), lambda: views.RolleAnfrageView(self)),
+            "rollenbestaetigen": ("rollenbestaetigen", lambda: panels.embed_rollenbestaetigen(), lambda: None),
+            "clipantrag": ("clipantrag", lambda: panels.embed_clipantrag(), lambda: views.ClipAntragView(self)),
+            "abgaben": ("abgaben", lambda: panels.embed_abgaben(self.db), lambda: views.AbgabeView(self)),
+            "kasse": ("kasse", lambda: panels.embed_kasse(self.db), lambda: views.KasseView(self)),
         }
         targets = names or list(mapping.keys())
+        updated = 0
         for name in targets:
-            if name == "aktivitaet":
+            if name == "aktivitaet" or name not in mapping:
                 continue
-            key, embed_coro, view = mapping[name]
+            key, embed_factory, view_factory = mapping[name]
             row = await database.get_panel(self.db, f"{guild.id}:{key}")
             if not row:
                 continue
@@ -195,54 +200,61 @@ class ClubBot(commands.Bot):
                 continue
             try:
                 msg = await ch.fetch_message(row["message_id"])
-            except discord.NotFound:
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 continue
+            view = view_factory()
             if name == "routen":
                 try:
                     await msg.edit(content="# Unsere Route", embed=None, view=view)
+                    updated += 1
                 except discord.HTTPException:
                     pass
                 continue
-            embed = await embed_coro
             try:
+                embed = await embed_factory()
                 await msg.edit(embed=embed, view=view)
+                updated += 1
             except discord.HTTPException:
                 pass
+        return updated
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
         builders = {
-            "mitarbeiter": (panels.embed_mitarbeiter(guild), None),
-            "memberliste": (panels.embed_memberliste(guild), None),
-            "rang": (panels.embed_rangsystem(guild), None),
-            "aufstellung": (panels.embed_aufstellung(guild, self.db), views.DienstView(self)),
-            "dienst": (panels.embed_abmeldung(guild, self.db), views.AbmeldungView(self)),
-            "katalog": (panels.embed_katalog(self.db), None),
-            "sanktionen": (panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
-            "ausruestung": (panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
-            "lager": (panels.embed_lager(self.db), views.LagerView(self)),
-            "bosslager": (panels.embed_boss_lager(self.db), views.BossLagerView(self)),
-            "urlaub": (panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
-            "infos": (panels.embed_infos(self.db), None),
-            "arbeiter": (panels.embed_arbeiter(guild, self.db), views.ArbeiterView(self)),
-            "tickets": (panels.embed_tickets(), views.TicketView(self)),
-            "regeln": (panels.embed_regeln(self.db), None),
-            "status": (panels.embed_status(self.db), views.StatusView(self)),
-            "aktivitaet": (panels.embed_aktivitaet(guild, self.db), views.AktivitaetView(self)),
-            "notizen": (panels.embed_notizen(self.db), None),
-            "blacklist": (panels.embed_blacklist(self.db), views.BlacklistView(self)),
-            "pflicht": (panels.embed_pflicht(), None),
-            "routen": (panels.embed_routes(self.db), views.RouteView(self)),
-            "einkauf": (panels.embed_einkauf(self.db), views.EinkaufView(self)),
-            "routecheck": (panels.embed_routecheck(self.db), views.RouteCheckView(self)),
-            "lootdrop": (panels.embed_lootdrop(self.db), views.LootView(self)),
-            "rollenanfrage": (panels.embed_rollenanfrage(), views.RolleAnfrageView(self)),
-            "rollenbestaetigen": (panels.embed_rollenbestaetigen(), None),
-            "clipantrag": (panels.embed_clipantrag(), views.ClipAntragView(self)),
-            "abgaben": (panels.embed_abgaben(self.db), views.AbgabeView(self)),
-            "kasse": (panels.embed_kasse(self.db), views.KasseView(self)),
+            "mitarbeiter": (lambda: panels.embed_mitarbeiter(guild), lambda: None),
+            "memberliste": (lambda: panels.embed_memberliste(guild), lambda: None),
+            "rang": (lambda: panels.embed_rangsystem(guild), lambda: None),
+            "aufstellung": (lambda: panels.embed_aufstellung(guild, self.db), lambda: views.DienstView(self)),
+            "dienst": (lambda: panels.embed_abmeldung(guild, self.db), lambda: views.AbmeldungView(self)),
+            "katalog": (lambda: panels.embed_katalog(self.db), lambda: None),
+            "sanktionen": (lambda: panels.embed_sanktionen(guild, self.db), lambda: views.SanktionView(self)),
+            "ausruestung": (lambda: panels.embed_ausruestung(guild, self.db), lambda: views.AusruestungView(self)),
+            "lager": (lambda: panels.embed_lager(self.db), lambda: views.LagerView(self)),
+            "bosslager": (lambda: panels.embed_boss_lager(self.db), lambda: views.BossLagerView(self)),
+            "urlaub": (lambda: panels.embed_urlaub(guild, self.db), lambda: views.UrlaubView(self)),
+            "infos": (lambda: panels.embed_infos(self.db), lambda: None),
+            "arbeiter": (lambda: panels.embed_arbeiter(guild, self.db), lambda: views.ArbeiterView(self)),
+            "tickets": (lambda: panels.embed_tickets(), lambda: views.TicketView(self)),
+            "regeln": (lambda: panels.embed_regeln(self.db), lambda: None),
+            "status": (lambda: panels.embed_status(self.db), lambda: views.StatusView(self)),
+            "aktivitaet": (lambda: panels.embed_aktivitaet(guild, self.db), lambda: views.AktivitaetView(self)),
+            "notizen": (lambda: panels.embed_notizen(self.db), lambda: None),
+            "blacklist": (lambda: panels.embed_blacklist(self.db), lambda: views.BlacklistView(self)),
+            "pflicht": (lambda: panels.embed_pflicht(), lambda: None),
+            "routen": (lambda: panels.embed_routes(self.db), lambda: views.RouteView(self)),
+            "einkauf": (lambda: panels.embed_einkauf(self.db), lambda: views.EinkaufView(self)),
+            "routecheck": (lambda: panels.embed_routecheck(self.db), lambda: views.RouteCheckView(self)),
+            "lootdrop": (lambda: panels.embed_lootdrop(self.db), lambda: views.LootView(self)),
+            "rollenanfrage": (lambda: panels.embed_rollenanfrage(), lambda: views.RolleAnfrageView(self)),
+            "rollenbestaetigen": (lambda: panels.embed_rollenbestaetigen(), lambda: None),
+            "clipantrag": (lambda: panels.embed_clipantrag(), lambda: views.ClipAntragView(self)),
+            "abgaben": (lambda: panels.embed_abgaben(self.db), lambda: views.AbgabeView(self)),
+            "kasse": (lambda: panels.embed_kasse(self.db), lambda: views.KasseView(self)),
         }
-        embed_coro, view = builders[key]
+        if key not in builders:
+            raise KeyError(f"Unbekanntes Panel: {key}")
+        embed_factory, view_factory = builders[key]
+        view = view_factory()
         if key == "aktivitaet":
             ping = panels.ping_ophelia(guild)
             img = Path(__file__).resolve().parent.parent / "assets" / "aktivitaet.png"
@@ -250,29 +262,36 @@ class ClubBot(commands.Bot):
             if img.exists():
                 kwargs["file"] = discord.File(img, filename="aktivitaet.png")
             msg = await channel.send(**kwargs)
+        elif key == "routen":
+            msg = await channel.send(content="# Unsere Route", view=view)
         else:
-            if key == "routen":
-                msg = await channel.send(content="# Unsere Route", view=view)
-            else:
-                embed = await embed_coro
-                heading = embed.title or key
-                msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
+            embed = await embed_factory()
+            heading = embed.title or key
+            msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 
     async def repost_panel(self, guild, key):
         row = await database.get_panel(self.db, f"{guild.id}:{key}")
         if not row:
-            return
+            return None
         ch = guild.get_channel(row["channel_id"])
         if not ch:
-            return
+            return None
+        old = None
         try:
             old = await ch.fetch_message(row["message_id"])
-            await old.delete()
         except discord.HTTPException:
-            pass
-        await self.post_panel(ch, key)
+            old = None
+        # Erst neue Nachricht posten und DB-Zeiger aktualisieren. So bleibt bei einem
+        # Discord-Fehler nicht plötzlich gar kein Panel mehr übrig.
+        msg = await self.post_panel(ch, key)
+        if old and old.id != msg.id:
+            try:
+                await old.delete()
+            except discord.HTTPException:
+                pass
+        return msg
 
 
 bot = ClubBot()
