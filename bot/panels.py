@@ -308,8 +308,9 @@ async def embed_lager(db):
         items = grouped[cat]
         clean.append(f"**{cat} ({len(items)})**")
         if items:
-            for r in sorted(items, key=lambda x: x["item"].lower()):
-                clean.append(f"• {r['item']}  —  **{r['qty']}**")
+            for r in items:
+                qty = f"{int(r['qty']):,}".replace(",", ".")
+                clean.append(f"• {r['item']}  —  **{qty}**")
         else:
             clean.append("_leer_")
         clean.append("")
@@ -333,7 +334,7 @@ async def embed_lager(db):
 
 
 async def embed_boss_lager(db):
-    cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY item")
+    cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY rowid")
     rows = await cur.fetchall()
 
     # Kategorien sind im Boss-Lager frei anlegbar. Leere Kategorien bleiben sichtbar.
@@ -362,8 +363,9 @@ async def embed_boss_lager(db):
         items = grouped.get(cat, [])
         clean.append(f"**{cat} ({len(items)})**")
         if items:
-            for r in sorted(items, key=lambda x: x["item"].lower()):
-                clean.append(f"• {r['item']}  —  **{r['qty']}**")
+            for r in items:
+                qty = f"{int(r['qty']):,}".replace(",", ".")
+                clean.append(f"• {r['item']}  —  **{qty}**")
         else:
             clean.append("_leer_")
         clean.append("")
