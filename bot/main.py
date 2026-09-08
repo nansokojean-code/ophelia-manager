@@ -290,6 +290,10 @@ async def on_ready():
     # Die eigentlichen Commands/Funktionen bleiben unverändert.
     for g in bot.guilds:
         try:
+            # Alte/stale Server-Commands (z. B. ein früheres „Custom-Panel“)
+            # zuerst vollständig aus dem lokalen Tree entfernen und danach
+            # die aktuellen globalen Commands frisch pro Server registrieren.
+            bot.tree.clear_commands(guild=g)
             bot.tree.copy_global_to(guild=g)
             synced = await bot.tree.sync(guild=g)
             print(f"Command-Sync für {g.name}: {len(synced)} Commands")
