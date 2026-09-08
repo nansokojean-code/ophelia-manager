@@ -1296,6 +1296,18 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
             f"Menge / Abgabe: {menge}\n"
             f"Abgeben bis: {bis}"
         )
+        # Falls das aktuelle Panel noch aus einer älteren Version als Embed/Tabelle
+        # existiert, sofort auf eine reine Button-Nachricht umstellen.
+        if self.panel_message is not None:
+            try:
+                await self.panel_message.edit(
+                    content="# Unsere Route",
+                    embed=None,
+                    view=RouteView(self.bot),
+                )
+            except discord.HTTPException:
+                pass
+
         posted = await interaction.channel.send(route_text)
 
         # Nachrichten-ID merken, damit 'Löschen' auch die gepostete Route entfernt.

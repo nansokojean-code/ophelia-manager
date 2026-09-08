@@ -197,6 +197,12 @@ class ClubBot(commands.Bot):
                 msg = await ch.fetch_message(row["message_id"])
             except discord.NotFound:
                 continue
+            if name == "routen":
+                try:
+                    await msg.edit(content="# Unsere Route", embed=None, view=view)
+                except discord.HTTPException:
+                    pass
+                continue
             embed = await embed_coro
             try:
                 await msg.edit(embed=embed, view=view)
@@ -245,9 +251,12 @@ class ClubBot(commands.Bot):
                 kwargs["file"] = discord.File(img, filename="aktivitaet.png")
             msg = await channel.send(**kwargs)
         else:
-            embed = await embed_coro
-            heading = embed.title or key
-            msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
+            if key == "routen":
+                msg = await channel.send(content="# Unsere Route", view=view)
+            else:
+                embed = await embed_coro
+                heading = embed.title or key
+                msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 
