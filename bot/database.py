@@ -191,12 +191,8 @@ async def init(db: aiosqlite.Connection):
         );
         """
     )
-    # Boss-Lager Kategorien initialisieren und vorhandene Kategorien übernehmen
-    for _cat in ("Essen", "Trinken", "Sonstiges"):
-        await db.execute(
-            "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, datetime('now'))",
-            (_cat,),
-        )
+    # Vorhandene Boss-Lager-Kategorien aus Gegenständen übernehmen.
+    # Keine festen Standard-Kategorien bei jedem Start neu anlegen, damit gelöschte Kategorien gelöscht bleiben.
     await db.execute(
         "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) "
         "SELECT DISTINCT category, datetime('now') FROM boss_inventory "
