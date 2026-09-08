@@ -19,27 +19,35 @@ async def finish_ephemeral(interaction: discord.Interaction, text: str):
     return await interaction.response.send_message(text, ephemeral=True)
 
 
+def _interaction_is_stale_or_done(exc: Exception) -> bool:
+    # 10062 = Unknown interaction (Token abgelaufen / falsche Instanz)
+    # 40060 = Interaction already acknowledged (z. B. zweite Bot-Instanz oder Doppelantwort)
+    return isinstance(exc, discord.InteractionResponded) or getattr(exc, "code", None) in (10062, 40060)
+
+
 async def safe_defer(interaction: discord.Interaction) -> bool:
-    """Bestätigt eine Interaction sofort. Bei Discord-10062 wird die Aktion trotzdem ausgeführt."""
+    """Bestätigt eine Interaction genau einmal und verschluckt 10062/40060 sauber."""
     if interaction.response.is_done():
         return True
     try:
         await interaction.response.defer(ephemeral=True)
         return True
-    except discord.NotFound as exc:
-        if getattr(exc, "code", None) == 10062:
-            return False
+    except (discord.InteractionResponded, discord.HTTPException) as exc:
+        if _interaction_is_stale_or_done(exc):
+            # 40060 bedeutet: Discord hat bereits eine Antwort. Die Aktion darf weiterlaufen.
+            # 10062 bedeutet: Diese Interaction kann nicht mehr beantwortet werden.
+            return getattr(exc, "code", None) == 40060 or isinstance(exc, discord.InteractionResponded)
         raise
 
 
 async def safe_feedback(interaction: discord.Interaction, text: str, acknowledged: bool = True):
-    """Antwortet nur, wenn der Interaction-Token noch gültig ist; erzeugt keine 10062-Fehlermeldung."""
+    """Private Rückmeldung ohne sichtbare 10062/40060-Fehlermeldungen."""
     if not acknowledged:
         return None
     try:
         return await finish_ephemeral(interaction, text)
-    except discord.NotFound as exc:
-        if getattr(exc, "code", None) == 10062:
+    except (discord.InteractionResponded, discord.HTTPException) as exc:
+        if _interaction_is_stale_or_done(exc):
             return None
         raise
 

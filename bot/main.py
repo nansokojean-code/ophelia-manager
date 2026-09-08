@@ -1,3 +1,4 @@
+BUILD_ID = "2026-09-08-interaction-v3"
 import asyncio
 import os
 import sys
@@ -303,6 +304,7 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.watching, name="Ophelia Manager")
     )
     print(f"Ophelia Manager online als {bot.user} ({bot.user.id})")
+    print(f"Build: {BUILD_ID}")
 
     # Slash-Commands pro Server synchronisieren, damit Discord die festen
     # /setup-Panel-Optionen sofort und zuverlässig aktualisiert.
