@@ -200,7 +200,58 @@ async def init(db: aiosqlite.Connection):
     )
     await db.commit()
 
-    await db.commit()
+    # Boss-Menü-Lager: gewünschter Startbestand (einmalige Migration).
+    # Die Versionsmarke verhindert, dass spätere Änderungen am Lager bei jedem Neustart zurückgesetzt werden.
+    boss_seed = await get_setting(db, "boss_inventory_seed", "0")
+    if boss_seed != "2026-09-09-v1":
+        boss_categories = [
+            "Munition & Magazine",
+            "Waffen",
+            "Schutz & Ausrüstung",
+            "Materialien",
+            "Drogen",
+            "Geld",
+        ]
+        boss_items = [
+            ("SMG Magazin", "Munition & Magazine", 48),
+            ("Schrotflinten Magazin", "Munition & Magazine", 25),
+            ("Brecheisen", "Waffen", 0),
+            ("Pistole MK2", "Waffen", 381),
+            ("Pistole", "Waffen", 55),
+            ("Abgesägte Schrotflinte", "Waffen", 0),
+            ("SNS Pistole", "Waffen", 117),
+            ("Messer", "Waffen", 0),
+            ("Schutzweste", "Schutz & Ausrüstung", 22),
+            ("Schwere Weste", "Schutz & Ausrüstung", 13),
+            ("Metall", "Materialien", 7295),
+            ("Waffenrahmen", "Materialien", 24),
+            ("Polyethylenplatten", "Materialien", 960),
+            ("Baumwolle", "Materialien", 774),
+            ("Semtex", "Materialien", 3),
+            ("Static Sift", "Drogen", 1),
+            ("Frozen Sift", "Drogen", 3),
+            ("Alien OG", "Drogen", 6),
+            ("Purple Skunk", "Drogen", 6),
+            ("Banana Spliff Cookie", "Drogen", 2),
+            ("Amnesia Haze Joint", "Drogen", 3),
+            ("OG Kush Joint", "Drogen", 1),
+            ("Schwarzgeld", "Geld", 370316),
+        ]
+        await db.execute("DELETE FROM boss_inventory")
+        await db.execute("DELETE FROM boss_inventory_categories")
+        await db.executemany(
+            "INSERT INTO boss_inventory_categories(name, created_at) VALUES(?, datetime('now'))",
+            [(name,) for name in boss_categories],
+        )
+        await db.executemany(
+            "INSERT INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
+            boss_items,
+        )
+        await db.execute(
+            "INSERT INTO settings(key, value) VALUES('boss_inventory_seed', '2026-09-09-v1') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        )
+        await db.commit()
 
     seeded = await get_setting(db, "rules_seed", "0")
     if seeded != "2":

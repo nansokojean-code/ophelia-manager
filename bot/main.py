@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-setup-custom-panel-v4"
+BUILD_ID = "2026-09-09-setup-custom-panel-v5-hard-alias"
 import asyncio
 import os
 import sys
@@ -221,6 +221,26 @@ class ClubBot(commands.Bot):
 
     async def post_panel(self, channel: discord.TextChannel, key: str):
         guild = channel.guild
+
+        # Legacy-/Cache-Schutz: Discord kann nach alten Deploys noch frühere
+        # Choice-Werte wie "Custom-Panel" senden. Hier wird deshalb direkt
+        # an der zentralen Panel-Funktion normalisiert, damit selbst alte
+        # Slash-Command-Payloads nicht mehr in einen "nicht gefunden"-Fehler laufen.
+        raw_key = str(key or "").strip()
+        normalized_key = raw_key.lower().replace("_", "-").replace(" ", "-")
+        legacy_aliases = {
+            "custom-panel": "bosslager",
+            "custompanel": "bosslager",
+            "boss-menü-lager": "bosslager",
+            "boss-menu-lager": "bosslager",
+            "boss-menue-lager": "bosslager",
+            "boss-manager": "bosslager",
+            "bossmanager": "bosslager",
+            "unsere-route": "routen",
+            "route": "routen",
+        }
+        key = legacy_aliases.get(normalized_key, normalized_key.replace("-", ""))
+
         builders = {
             "mitarbeiter": (lambda: panels.embed_mitarbeiter(guild), lambda: None),
             "memberliste": (lambda: panels.embed_memberliste(guild), lambda: None),
@@ -537,6 +557,9 @@ async def setup_cmd(interaction: discord.Interaction, panel: str):
         "boss-menü-lager": "bosslager",
         "boss-menu-lager": "bosslager",
         "bosslager": "bosslager",
+        "boss-menue-lager": "bosslager",
+        "boss-manager": "bosslager",
+        "bossmanager": "bosslager",
         "unsere-route": "routen",
         "route": "routen",
     }
@@ -576,6 +599,15 @@ async def setup_cmd(interaction: discord.Interaction, panel: str):
             "Diese alte Panel-Auswahl existiert nicht mehr. Bitte `/setup` neu öffnen.",
             ephemeral=True,
         )
+
+
+@bot.tree.command(name="version", description="Zeigt die aktuell laufende Bot-Version")
+async def version_cmd(interaction: discord.Interaction):
+    msg = f"Ophelia Manager Build: `{BUILD_ID}`"
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 @bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
