@@ -78,6 +78,20 @@ async def init(db: aiosqlite.Connection):
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS boss_inventory (
+            item TEXT PRIMARY KEY,
+            category TEXT NOT NULL DEFAULT 'Sonstiges',
+            qty INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS boss_inventory_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item TEXT NOT NULL,
+            delta INTEGER NOT NULL,
+            who_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS equipment (
             user_id INTEGER PRIMARY KEY,
             status TEXT NOT NULL DEFAULT 'ungeprüft',

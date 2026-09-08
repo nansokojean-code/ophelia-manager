@@ -42,6 +42,7 @@ SETUP_PANELS = [
     "mitarbeiter",
     "pflicht",
     "lager",
+    "bosslager",
     "lootdrop",
     "abgaben",
     "kasse",
@@ -66,6 +67,7 @@ PANEL_NAMES = [
     "sanktionen",
     "ausruestung",
     "lager",
+    "bosslager",
     "urlaub",
     "infos",
     "arbeiter",
@@ -97,6 +99,7 @@ class ClubBot(commands.Bot):
         self.add_view(views.DienstView(self))
         self.add_view(views.AufstellungView(self))
         self.add_view(views.LagerView(self))
+        self.add_view(views.BossLagerView(self))
         self.add_view(views.SanktionView(self))
         self.add_view(views.AusruestungView(self))
         self.add_view(views.UrlaubView(self))
@@ -158,6 +161,7 @@ class ClubBot(commands.Bot):
             "sanktionen": ("sanktionen", panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
             "ausruestung": ("ausruestung", panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
             "lager": ("lager", panels.embed_lager(self.db), views.LagerView(self)),
+            "bosslager": ("bosslager", panels.embed_boss_lager(self.db), views.BossLagerView(self)),
             "urlaub": ("urlaub", panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
             "infos": ("infos", panels.embed_infos(self.db), None),
             "arbeiter": ("arbeiter", panels.embed_arbeiter(guild, self.db), views.ArbeiterView(self)),
@@ -211,6 +215,7 @@ class ClubBot(commands.Bot):
             "sanktionen": (panels.embed_sanktionen(guild, self.db), views.SanktionView(self)),
             "ausruestung": (panels.embed_ausruestung(guild, self.db), views.AusruestungView(self)),
             "lager": (panels.embed_lager(self.db), views.LagerView(self)),
+            "bosslager": (panels.embed_boss_lager(self.db), views.BossLagerView(self)),
             "urlaub": (panels.embed_urlaub(guild, self.db), views.UrlaubView(self)),
             "infos": (panels.embed_infos(self.db), None),
             "arbeiter": (panels.embed_arbeiter(guild, self.db), views.ArbeiterView(self)),

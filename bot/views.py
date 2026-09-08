@@ -283,6 +283,100 @@ class LagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         )
 
 
+class BossLagerModal(discord.ui.Modal):
+    item = discord.ui.TextInput(label="Was (genau wie im Boss Menü Lager)", required=True, max_length=80)
+    menge = discord.ui.TextInput(label="Wie viel (Zahl)", required=True, max_length=8)
+    wer = discord.ui.TextInput(label="Wer (leer = du)", required=False, max_length=40)
+
+    def __init__(self, bot, direction: int):
+        title = "Reinlegen" if direction > 0 else "Rausnehmen"
+        super().__init__(title=title)
+        self.bot = bot
+        self.direction = direction
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.bot:
+            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        try:
+            qty = int(str(self.menge).strip())
+            if qty <= 0:
+                raise ValueError
+        except ValueError:
+            return await interaction.response.send_message("Menge muss eine Zahl größer 0 sein.", ephemeral=True)
+
+        item_in = str(self.item).strip()
+        who = interaction.user.id
+        if str(self.wer).strip():
+            text = str(self.wer).strip().lstrip("@")
+            found = discord.utils.find(
+                lambda m: m.name.lower() == text.lower() or m.display_name.lower() == text.lower(),
+                interaction.guild.members,
+            )
+            who = found.id if found else interaction.user.id
+
+        cur = await self.bot.db.execute(
+            "SELECT item, qty FROM boss_inventory WHERE lower(item) = lower(?)", (item_in,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return await interaction.response.send_message(
+                f"`{item_in}` gibt es nicht im Boss Menü Lager. Zuerst mit **Gegenstand anlegen** anlegen.",
+                ephemeral=True,
+            )
+        item = row["item"]
+        new_qty = row["qty"] + (qty * self.direction)
+        if new_qty < 0:
+            return await interaction.response.send_message(
+                f"Nicht genug Bestand. Aktuell: {row['qty']}.", ephemeral=True
+            )
+        await self.bot.db.execute("UPDATE boss_inventory SET qty = ? WHERE item = ?", (new_qty, item))
+        await self.bot.db.execute(
+            "INSERT INTO boss_inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
+            (item, qty * self.direction, who, stamp()),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["bosslager"])
+        verb = "reingelegt" if self.direction > 0 else "rausgenommen"
+        line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
+        await self.bot.log(interaction.guild, line, "Boss Menü Lager")
+        await interaction.response.send_message(
+            f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.", ephemeral=True
+        )
+
+
+class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
+    item = discord.ui.TextInput(label="Name", required=True, max_length=80)
+    kategorie = discord.ui.TextInput(
+        label="Kategorie (Essen / Trinken / Sonstiges)",
+        required=True,
+        max_length=40,
+        default="Sonstiges",
+    )
+    menge = discord.ui.TextInput(label="Startbestand", required=True, max_length=8, default="0")
+
+    def __init__(self, bot):
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            qty = int(str(self.menge).strip())
+        except ValueError:
+            return await interaction.response.send_message("Startbestand muss eine Zahl sein.", ephemeral=True)
+        from panels import _norm_kat
+        name = str(self.item).strip()
+        kat = _norm_kat(str(self.kategorie))
+        await self.bot.db.execute(
+            "INSERT OR REPLACE INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
+            (name, kat, qty),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["bosslager"])
+        await interaction.response.send_message(
+            f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).", ephemeral=True
+        )
+
+
 class RosterModal(discord.ui.Modal, title="Aufstellung setzen"):
     person_id = discord.ui.TextInput(label="Discord-ID der Person", required=True, max_length=25)
     bereich = discord.ui.TextInput(
@@ -534,6 +628,33 @@ class LagerView(discord.ui.View):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
         await self.bot.repost_panel(interaction.guild, "lager")
         await interaction.response.send_message("Lager aktualisiert.", ephemeral=True)
+
+
+class BossLagerView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="bosslager:in")
+    async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BossLagerModal(self.bot, +1))
+
+    @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="bosslager:out")
+    async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BossLagerModal(self.bot, -1))
+
+    @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="bosslager:new")
+    async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(BossLagerNeuModal(self.bot))
+
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="bosslager:refresh")
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await self.bot.repost_panel(interaction.guild, "bosslager")
+        await interaction.response.send_message("Boss Menü Lager aktualisiert.", ephemeral=True)
 
 
 class SanktionView(discord.ui.View):

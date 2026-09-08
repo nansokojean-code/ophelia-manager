@@ -332,6 +332,43 @@ async def embed_lager(db):
     return e
 
 
+async def embed_boss_lager(db):
+    cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY item")
+    rows = await cur.fetchall()
+    grouped = {k: [] for k in LAGER_KATS}
+    for r in rows:
+        kat = _norm_kat(r["category"])
+        grouped[kat].append(r)
+
+    clean = []
+    for cat in LAGER_KATS:
+        items = grouped[cat]
+        clean.append(f"**{cat} ({len(items)})**")
+        if items:
+            for r in sorted(items, key=lambda x: x["item"].lower()):
+                clean.append(f"• {r['item']}  —  **{r['qty']}**")
+        else:
+            clean.append("_leer_")
+        clean.append("")
+
+    cur = await db.execute(
+        "SELECT item, delta, who_id, created_at FROM boss_inventory_log ORDER BY id DESC LIMIT 5"
+    )
+    logs = await cur.fetchall()
+    clean.append("**Letzte Bewegung**")
+    if logs:
+        for lg in logs:
+            sign = "+" if lg["delta"] > 0 else ""
+            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
+    else:
+        clean.append("_noch keine_")
+
+    e = discord.Embed(title="Boss Menü Lager", color=0x2B2D31)
+    e.description = "\n".join(clean).strip()
+    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
+    return e
+
+
 async def embed_urlaub(guild, db):
     cur = await db.execute(
         "SELECT user_id, start, end, reason FROM vacations ORDER BY id DESC LIMIT 30"
@@ -490,13 +527,30 @@ async def embed_routes(db):
     try:
         cur = await db.execute("SELECT name, amount FROM routes ORDER BY id")
         rows = await cur.fetchall()
-        lines = [f"• **{r['name']}** — {r['amount'] or '-'}" for r in rows]
+        blocks = []
+        for r in rows:
+            name = str(r["name"]).strip()
+            amount = str(r["amount"] or "").strip()
+            if amount:
+                # Als normaler Textblock statt als Aufzählung/Liste anzeigen.
+                parts = [part.strip() for part in amount.split("|", 1)]
+                menge = parts[0] if parts else amount
+                bis = parts[1].strip() if len(parts) > 1 else ""
+                if bis.lower().startswith("bis "):
+                    bis = bis[4:].strip()
+                text = f"**{name}**\nMenge / Abgabe: {menge}"
+                if bis:
+                    text += f"\nAbgeben bis: {bis}"
+                blocks.append(text)
+            else:
+                blocks.append(f"**{name}**")
     except Exception:
         cur = await db.execute("SELECT name FROM routes ORDER BY id")
         rows = await cur.fetchall()
-        lines = [f"• {r['name']}" for r in rows]
+        blocks = [f"**{str(r['name']).strip()}**" for r in rows]
+
     e = discord.Embed(title="Unsere Route", color=0x2B2D31)
-    e.description = "\n".join(lines) or "_keine Route_"
+    e.description = "\n\n".join(blocks) or "_keine Route_"
     e.set_footer(text=now_footer("Website"))
     return e
 
