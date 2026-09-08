@@ -1150,6 +1150,10 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+
+        # Die Modal-Interaction schnell bestätigen, damit Discord nicht in ein Timeout läuft.
+        await interaction.response.defer(ephemeral=True)
+
         try:
             await self.bot.db.execute(
                 "INSERT INTO routes(name, amount) VALUES(?, ?)",
@@ -1158,8 +1162,26 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
         except Exception:
             await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (f"{self.name} — {self.menge}",))
         await self.bot.db.commit()
+
+        # Wichtig: Die Nachricht, von der das Modal geöffnet wurde, direkt bearbeiten.
+        # So wird immer genau das sichtbare Routen-Panel aktualisiert, auch wenn die
+        # gespeicherte Panel-ID in der Datenbank einmal veraltet sein sollte.
+        try:
+            if interaction.message is not None:
+                from panels import embed_routes
+                await interaction.message.edit(
+                    embed=await embed_routes(self.bot.db),
+                    view=RouteView(self.bot),
+                )
+        except discord.HTTPException:
+            pass
+
+        # Zusätzlich das registrierte Panel synchron halten.
         await self.bot.refresh_panels(interaction.guild, ["routen"])
-        await interaction.response.send_message(f"Route **{self.name}** ({self.menge}) steht in der Liste.", ephemeral=True)
+        await interaction.followup.send(
+            f"Route **{self.name}** ({self.menge}) steht in der Liste.",
+            ephemeral=True,
+        )
 
 
 class RouteDelModal(discord.ui.Modal, title="Route löschen"):
@@ -1172,10 +1194,23 @@ class RouteDelModal(discord.ui.Modal, title="Route löschen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute("DELETE FROM routes WHERE name = ?", (str(self.name).strip(),))
         await self.bot.db.commit()
+
+        try:
+            if interaction.message is not None:
+                from panels import embed_routes
+                await interaction.message.edit(
+                    embed=await embed_routes(self.bot.db),
+                    view=RouteView(self.bot),
+                )
+        except discord.HTTPException:
+            pass
+
         await self.bot.refresh_panels(interaction.guild, ["routen"])
-        await interaction.response.send_message("Route gelöscht.", ephemeral=True)
+        await interaction.followup.send("Route gelöscht.", ephemeral=True)
 
 
 class EinkaufModal(discord.ui.Modal, title="Eingekauft"):
