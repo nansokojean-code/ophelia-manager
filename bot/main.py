@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-setup-v6-no-stale-choice"
+BUILD_ID = "2026-09-09-bosslager-v7-immediate-ack"
 import asyncio
 import os
 import sys

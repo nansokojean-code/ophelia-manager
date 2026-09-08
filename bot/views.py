@@ -323,12 +323,13 @@ class LagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
         try:
             qty = int(str(self.menge.value).strip())
         except ValueError:
-            return await interaction.response.send_message("Startbestand muss eine Zahl sein.", ephemeral=True)
+            return await safe_feedback(interaction, "Startbestand muss eine Zahl sein.", acknowledged)
         from panels import _norm_kat
         name = str(self.item).strip()
         kat = _norm_kat(str(self.kategorie))
@@ -354,49 +355,80 @@ class BossLagerModal(discord.ui.Modal):
         self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Modal sofort bestätigen. Render/SQLite/Discord dürfen danach beliebig lange brauchen,
+        # ohne dass Discord "Etwas ist schiefgelaufen" anzeigt.
+        acknowledged = await safe_defer(interaction)
         if interaction.user.bot:
-            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+            return await safe_feedback(interaction, "Keine Rechte.", acknowledged)
+
         try:
             qty = int(str(self.menge.value).strip())
             if qty <= 0:
                 raise ValueError
         except ValueError:
-            return await interaction.response.send_message("Menge muss eine Zahl größer 0 sein.", ephemeral=True)
+            return await safe_feedback(interaction, "Menge muss eine Zahl größer 0 sein.", acknowledged)
 
         item_in = str(self.item.value).strip()
         category_in = str(self.kategorie.value).strip()
         who = interaction.user.id
 
-        cur = await self.bot.db.execute(
-            "SELECT item, category, qty FROM boss_inventory WHERE lower(item) = lower(?) AND lower(category) = lower(?)",
-            (item_in, category_in),
-        )
-        row = await cur.fetchone()
-        if not row:
-            return await interaction.response.send_message(
-                f"`{item_in}` gibt es in der Kategorie **{category_in}** nicht. Prüfe Name/Kategorie oder lege den Gegenstand zuerst an.",
-                ephemeral=True,
+        try:
+            # Name + Kategorie case-insensitive suchen; trim verhindert Probleme durch Leerzeichen.
+            cur = await self.bot.db.execute(
+                "SELECT item, category, qty FROM boss_inventory "
+                "WHERE lower(trim(item)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))",
+                (item_in, category_in),
             )
-        item = row["item"]
-        new_qty = row["qty"] + (qty * self.direction)
-        if new_qty < 0:
-            return await interaction.response.send_message(
-                f"Nicht genug Bestand. Aktuell: {row['qty']}.", ephemeral=True
+            row = await cur.fetchone()
+            if not row:
+                return await safe_feedback(
+                    interaction,
+                    f"`{item_in}` gibt es in der Kategorie **{category_in}** nicht. Prüfe Name/Kategorie oder lege den Gegenstand zuerst an.",
+                    acknowledged,
+                )
+
+            item = row["item"]
+            category = row["category"]
+            old_qty = int(row["qty"])
+            new_qty = old_qty + (qty * self.direction)
+            if new_qty < 0:
+                return await safe_feedback(
+                    interaction, f"Nicht genug Bestand. Aktuell: **{old_qty}**.", acknowledged
+                )
+
+            # Eindeutig über item+category aktualisieren und danach sofort committen.
+            await self.bot.db.execute(
+                "UPDATE boss_inventory SET qty = ? WHERE item = ? AND category = ?",
+                (new_qty, item, category),
             )
-        acknowledged = await safe_defer(interaction)
-        await self.bot.db.execute("UPDATE boss_inventory SET qty = ? WHERE item = ?", (new_qty, item))
-        await self.bot.db.execute(
-            "INSERT INTO boss_inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
-            (item, qty * self.direction, who, stamp()),
-        )
-        await self.bot.db.commit()
-        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
-        verb = "reingelegt" if self.direction > 0 else "rausgenommen"
-        line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
-        await self.bot.log(interaction.guild, line, "Boss Menü Lager")
-        await safe_feedback(
-            interaction, f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.", acknowledged
-        )
+            await self.bot.db.execute(
+                "INSERT INTO boss_inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
+                (item, qty * self.direction, who, stamp()),
+            )
+            await self.bot.db.commit()
+
+            # Genau das sichtbare Boss-Lager aktualisieren. Fallback: registriertes Panel refreshen/reposten.
+            await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+
+            verb = "reingelegt" if self.direction > 0 else "rausgenommen"
+            line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
+            try:
+                await self.bot.log(interaction.guild, line, "Boss Menü Lager")
+            except Exception as log_exc:
+                print(f"[BossLager] Log konnte nicht gesendet werden: {log_exc!r}")
+
+            await safe_feedback(
+                interaction,
+                f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.",
+                acknowledged,
+            )
+        except Exception as exc:
+            print(f"[BossLager] Fehler bei Rein/Raus: {type(exc).__name__}: {exc}")
+            await safe_feedback(
+                interaction,
+                "Beim Speichern im Boss-Lager ist ein Fehler aufgetreten. Bitte erneut versuchen.",
+                acknowledged,
+            )
 
 
 class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
@@ -415,36 +447,41 @@ class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
         self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
         try:
             qty = int(str(self.menge.value).strip())
+            if qty < 0:
+                raise ValueError
         except ValueError:
-            return await interaction.response.send_message("Startbestand muss eine Zahl sein.", ephemeral=True)
+            return await safe_feedback(interaction, "Startbestand muss eine Zahl ab 0 sein.", acknowledged)
         name = str(self.item.value).strip()
         kat = str(self.kategorie.value).strip()
         if not name or not kat:
-            return await interaction.response.send_message("Name und Kategorie dürfen nicht leer sein.", ephemeral=True)
-
-        acknowledged = await safe_defer(interaction)
-        await self.bot.db.execute(
-            "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, ?)",
-            (kat, stamp()),
-        )
-        cur = await self.bot.db.execute(
-            "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
-        )
-        saved_cat = await cur.fetchone()
-        kat = saved_cat["name"] if saved_cat else kat
-        await self.bot.db.execute(
-            "INSERT OR REPLACE INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
-            (name, kat, qty),
-        )
-        await self.bot.db.commit()
-        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
-        await safe_feedback(
-            interaction, f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).", acknowledged
-        )
+            return await safe_feedback(interaction, "Name und Kategorie dürfen nicht leer sein.", acknowledged)
+        try:
+            await self.bot.db.execute(
+                "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, ?)",
+                (kat, stamp()),
+            )
+            cur = await self.bot.db.execute(
+                "SELECT name FROM boss_inventory_categories WHERE lower(trim(name)) = lower(trim(?))", (kat,)
+            )
+            saved_cat = await cur.fetchone()
+            kat = saved_cat["name"] if saved_cat else kat
+            await self.bot.db.execute(
+                "INSERT OR REPLACE INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
+                (name, kat, qty),
+            )
+            await self.bot.db.commit()
+            await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+            await safe_feedback(
+                interaction, f"**{name}** angelegt unter **{kat}** (Bestand: **{qty}**).", acknowledged
+            )
+        except Exception as exc:
+            print(f"[BossLager] Fehler beim Gegenstand anlegen: {type(exc).__name__}: {exc}")
+            await safe_feedback(interaction, "Gegenstand konnte nicht gespeichert werden.", acknowledged)
 
 
 class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
@@ -458,12 +495,12 @@ class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
         self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
         kat = str(self.kategorie.value).strip()
         if not kat:
-            return await interaction.response.send_message("Kategorie darf nicht leer sein.", ephemeral=True)
-        acknowledged = await safe_defer(interaction)
+            return await safe_feedback(interaction, "Kategorie darf nicht leer sein.", acknowledged)
         cur = await self.bot.db.execute(
             "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
         )
@@ -490,13 +527,13 @@ class BossLagerKategorieLoeschenModal(discord.ui.Modal, title="Kategorie lösche
         self.source_message = source_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
         kat = str(self.kategorie.value).strip()
         if not kat:
-            return await interaction.response.send_message("Kategorie darf nicht leer sein.", ephemeral=True)
+            return await safe_feedback(interaction, "Kategorie darf nicht leer sein.", acknowledged)
 
-        acknowledged = await safe_defer(interaction)
         cur = await self.bot.db.execute(
             "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
         )
