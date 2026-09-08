@@ -1272,37 +1272,52 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+
         await interaction.response.defer(ephemeral=True)
+        route_name = str(self.name).strip()
+        menge = str(self.menge).strip()
+        bis = str(self.bis).strip()
+
+        # Route speichern. Die sichtbare Route selbst kommt NICHT mehr ins Panel,
+        # sondern wird nach Bestätigung als normale Nachricht in den Kanal gepostet.
         try:
-            await self.bot.db.execute(
+            cur = await self.bot.db.execute(
                 "INSERT INTO routes(name, amount) VALUES(?, ?)",
-                (str(self.name).strip(), f"{self.menge} | bis {self.bis}"),
+                (route_name, f"{menge} | bis {bis}"),
             )
         except Exception:
-            await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (f"{self.name} — {self.menge}",))
+            cur = await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (route_name,))
+        route_id = cur.lastrowid
         await self.bot.db.commit()
 
-        # Das sichtbare "Unsere Route"-Panel sofort aktualisieren.
-        if self.panel_message is not None:
-            try:
-                from panels import embed_routes
-                await self.panel_message.edit(
-                    embed=await embed_routes(self.bot.db),
-                    view=RouteView(self.bot),
-                )
-            except discord.HTTPException:
-                pass
+        route_text = (
+            f"## Unsere Route\n"
+            f"**{route_name}**\n"
+            f"Menge / Abgabe: {menge}\n"
+            f"Abgeben bis: {bis}"
+        )
+        posted = await interaction.channel.send(route_text)
 
-        # Falls das Panel auch in der Datenbank registriert ist, dort ebenfalls aktualisieren.
+        # Nachrichten-ID merken, damit 'Löschen' auch die gepostete Route entfernt.
+        try:
+            await self.bot.db.execute(
+                "UPDATE routes SET message_id = ?, channel_id = ? WHERE id = ?",
+                (posted.id, posted.channel.id, route_id),
+            )
+            await self.bot.db.commit()
+        except Exception:
+            pass
+
+        # Das Steuerungs-Panel bleibt unverändert; dort werden keine Routendaten angezeigt.
         await self.bot.refresh_panels(interaction.guild, ["routen"])
         await interaction.followup.send(
-            f"Route **{self.name}** ({self.menge}) steht in der Liste.",
+            f"Route **{route_name}** wurde als Nachricht gepostet.",
             ephemeral=True,
         )
 
 
 class RouteDelModal(discord.ui.Modal, title="Route löschen"):
-    name = discord.ui.TextInput(label="Route genau wie in der Liste", required=True, max_length=80)
+    name = discord.ui.TextInput(label="Route genau wie gepostet", required=True, max_length=80)
 
     def __init__(self, bot, panel_message=None):
         super().__init__()
@@ -1312,20 +1327,42 @@ class RouteDelModal(discord.ui.Modal, title="Route löschen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+
         await interaction.response.defer(ephemeral=True)
-        await self.bot.db.execute("DELETE FROM routes WHERE name = ?", (str(self.name).strip(),))
-        await self.bot.db.commit()
+        route_name = str(self.name).strip()
 
-        if self.panel_message is not None:
+        try:
+            cur = await self.bot.db.execute(
+                "SELECT id, message_id, channel_id FROM routes WHERE name = ? ORDER BY id DESC",
+                (route_name,),
+            )
+            rows = await cur.fetchall()
+        except Exception:
+            cur = await self.bot.db.execute(
+                "SELECT id FROM routes WHERE name = ? ORDER BY id DESC",
+                (route_name,),
+            )
+            rows = await cur.fetchall()
+
+        # Gepostete Routennachrichten entfernen, sofern ihre IDs bekannt sind.
+        for row in rows:
             try:
-                from panels import embed_routes
-                await self.panel_message.edit(
-                    embed=await embed_routes(self.bot.db),
-                    view=RouteView(self.bot),
-                )
-            except discord.HTTPException:
-                pass
+                message_id = row["message_id"]
+                channel_id = row["channel_id"]
+            except Exception:
+                message_id = None
+                channel_id = None
+            if message_id:
+                ch = interaction.guild.get_channel(channel_id) if channel_id else interaction.channel
+                if ch is not None:
+                    try:
+                        msg = await ch.fetch_message(message_id)
+                        await msg.delete()
+                    except discord.HTTPException:
+                        pass
 
+        await self.bot.db.execute("DELETE FROM routes WHERE name = ?", (route_name,))
+        await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["routen"])
         await interaction.followup.send("Route gelöscht.", ephemeral=True)
 

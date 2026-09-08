@@ -524,33 +524,10 @@ async def embed_pflicht():
 
 
 async def embed_routes(db):
-    try:
-        cur = await db.execute("SELECT name, amount FROM routes ORDER BY id")
-        rows = await cur.fetchall()
-        blocks = []
-        for r in rows:
-            name = str(r["name"]).strip()
-            amount = str(r["amount"] or "").strip()
-            if amount:
-                # Als normaler Textblock statt als Aufzählung/Liste anzeigen.
-                parts = [part.strip() for part in amount.split("|", 1)]
-                menge = parts[0] if parts else amount
-                bis = parts[1].strip() if len(parts) > 1 else ""
-                if bis.lower().startswith("bis "):
-                    bis = bis[4:].strip()
-                text = f"**{name}**\nMenge / Abgabe: {menge}"
-                if bis:
-                    text += f"\nAbgeben bis: {bis}"
-                blocks.append(text)
-            else:
-                blocks.append(f"**{name}**")
-    except Exception:
-        cur = await db.execute("SELECT name FROM routes ORDER BY id")
-        rows = await cur.fetchall()
-        blocks = [f"**{str(r['name']).strip()}**" for r in rows]
-
+    # Das Panel dient nur noch als Steuerung. Eingetragene Routen werden
+    # nach dem Bestätigen als normale Discord-Nachricht in den Kanal gepostet.
     e = discord.Embed(title="Unsere Route", color=0x2B2D31)
-    e.description = "\n\n".join(blocks) or "_keine Route_"
+    e.description = "_Route über **Route eintragen** posten._"
     e.set_footer(text=now_footer("Website"))
     return e
 

@@ -256,6 +256,14 @@ async def init(db: aiosqlite.Connection):
         await db.execute("ALTER TABLE routes ADD COLUMN amount TEXT DEFAULT ''")
     except Exception:
         pass
+    try:
+        await db.execute("ALTER TABLE routes ADD COLUMN message_id INTEGER")
+    except Exception:
+        pass
+    try:
+        await db.execute("ALTER TABLE routes ADD COLUMN channel_id INTEGER")
+    except Exception:
+        pass
     await db.commit()
 
 
