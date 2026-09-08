@@ -270,6 +270,18 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.watching, name="Ophelia Manager")
     )
     print(f"Ophelia Manager online als {bot.user} ({bot.user.id})")
+
+    # Slash-Commands pro Server synchronisieren, damit Discord die festen
+    # /setup-Panel-Optionen sofort und zuverlässig aktualisiert.
+    # Die eigentlichen Commands/Funktionen bleiben unverändert.
+    for g in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=g)
+            synced = await bot.tree.sync(guild=g)
+            print(f"Command-Sync für {g.name}: {len(synced)} Commands")
+        except Exception as exc:
+            print(f"Command-Sync für {g.name} fehlgeschlagen:", exc)
+
     for g in bot.guilds:
         raw = await database.get_setting(bot.db, f"ranks:{g.id}")
         lead = await database.get_setting(bot.db, f"leaders:{g.id}")
