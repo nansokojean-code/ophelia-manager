@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-aufstellung-v9-unique-buttons"
+BUILD_ID = "2026-09-09-aufstellung-v10-single-ack"
 import asyncio
 import os
 import sys
@@ -88,6 +88,20 @@ PANEL_NAMES = [
     "abgaben",
     "kasse",
 ]
+
+
+async def _ophelia_view_on_error(self, interaction, error, item):
+    # Discord 10062/40060 sind Transport-/Doppelantwortfehler und sollen niemals
+    # als sichtbare Bot-Fehlermeldung im Channel landen.
+    code = getattr(error, "code", None)
+    if isinstance(error, discord.InteractionResponded) or code in (10062, 40060):
+        print(f"Interaction ignoriert ({code or 'already-responded'}): {error}")
+        return
+    print(f"View-Fehler bei {getattr(item, 'custom_id', None)}: {error!r}")
+
+
+# Einheitlicher Fehlerhandler für alle Views.
+discord.ui.View.on_error = _ophelia_view_on_error
 
 
 class ClubBot(commands.Bot):

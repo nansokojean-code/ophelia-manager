@@ -717,27 +717,31 @@ class DienstView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
-    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf9:an")
+    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf10:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
-        acknowledged = await safe_defer(interaction)
+        # Die Interaction wird höchstens einmal bestätigt. Danach gibt es absichtlich
+        # KEINE zweite response/followup-Nachricht. So kann 40060 hier nicht mehr entstehen.
+        try:
+            await safe_defer(interaction)
+        except Exception as err:
+            print(f"Aufstellung ACK (anmelden) unerwartet: {err!r}")
         try:
             await set_dienst(self.bot, interaction.user, "angemeldet")
-            await safe_feedback(interaction, "Angemeldet.", acknowledged)
         except Exception as err:
             print(f"Aufstellung anmelden Fehler für {interaction.user.id}: {err!r}")
-            await safe_feedback(interaction, "Anmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
-    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf9:ab")
+    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf10:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
-        acknowledged = await safe_defer(interaction)
+        try:
+            await safe_defer(interaction)
+        except Exception as err:
+            print(f"Aufstellung ACK (abmelden) unerwartet: {err!r}")
         try:
             await set_dienst(self.bot, interaction.user, "abgemeldet")
-            await safe_feedback(interaction, "Abgemeldet.", acknowledged)
         except Exception as err:
             print(f"Aufstellung abmelden Fehler für {interaction.user.id}: {err!r}")
-            await safe_feedback(interaction, "Abmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf9:ref")
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf10:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message(
@@ -747,7 +751,7 @@ class DienstView(discord.ui.View):
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         await interaction.followup.send("Liste neu.", ephemeral=True)
 
-    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf9:shift")
+    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf10:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message(
