@@ -696,15 +696,20 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
 
 
 async def set_dienst(bot, member, status):
+    # Zuerst nur den Status speichern und committen. Ein fehlgeschlagenes Panel-Refresh
+    # darf niemals dazu führen, dass An-/Abmelden als fehlgeschlagen gilt.
     await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (member.id,))
     await bot.db.execute(
         "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, ?, NULL, ?)",
         (member.id, status, stamp()),
     )
     await bot.db.commit()
-    updated = await bot.refresh_panels(member.guild, ["aufstellung"])
-    if not updated:
-        await bot.repost_panel(member.guild, "aufstellung")
+    try:
+        updated = await bot.refresh_panels(member.guild, ["aufstellung"])
+        if not updated:
+            await bot.repost_panel(member.guild, "aufstellung")
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+        print(f"Aufstellung-Panel konnte nicht aktualisiert werden: {exc!r}")
 
 
 class DienstView(discord.ui.View):
@@ -712,7 +717,7 @@ class DienstView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
 
-    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf2:an")
+    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf9:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
         acknowledged = await safe_defer(interaction)
         try:
@@ -722,7 +727,7 @@ class DienstView(discord.ui.View):
             print(f"Aufstellung anmelden Fehler für {interaction.user.id}: {err!r}")
             await safe_feedback(interaction, "Anmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
-    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf2:ab")
+    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf9:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
         acknowledged = await safe_defer(interaction)
         try:
@@ -732,7 +737,7 @@ class DienstView(discord.ui.View):
             print(f"Aufstellung abmelden Fehler für {interaction.user.id}: {err!r}")
             await safe_feedback(interaction, "Abmelden konnte nicht gespeichert werden. Bitte erneut versuchen.", acknowledged)
 
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf2:ref")
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf9:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message(
@@ -742,7 +747,7 @@ class DienstView(discord.ui.View):
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         await interaction.followup.send("Liste neu.", ephemeral=True)
 
-    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf2:shift")
+    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf9:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not is_leader(interaction.user):
             return await interaction.response.send_message(

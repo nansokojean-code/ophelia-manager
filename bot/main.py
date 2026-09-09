@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-bosslager-v8-stock-update"
+BUILD_ID = "2026-09-09-aufstellung-v9-unique-buttons"
 import asyncio
 import os
 import sys
