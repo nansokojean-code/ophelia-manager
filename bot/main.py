@@ -32,7 +32,7 @@ intents.message_content = True
 
 SETUP_PANELS = [
     "mitarbeiter", "memberliste", "rang", "aufstellung", "dienst", "katalog",
-    "sanktionen", "ausruestung", "lager", "urlaub", "infos", "arbeiter",
+    "sanktionen", "ausruestung", "bosslager", "normaleslager", "urlaub", "infos", "arbeiter",
     "tickets", "regeln", "status", "aktivitaet", "notizen", "blacklist",
     "pflicht", "routen", "einkauf", "routecheck", "lootdrop", "rollenanfrage",
     "rollenbestaetigen", "clipantrag", "abgaben", "kasse",
@@ -47,7 +47,8 @@ PANEL_NAMES = [
     "katalog",
     "sanktionen",
     "ausruestung",
-    "lager",
+    "bosslager",
+    "normaleslager",
     "urlaub",
     "infos",
     "arbeiter",
@@ -89,6 +90,8 @@ class ClubBot(commands.Bot):
         await self.load_web_button_config()
         self.add_view(views.DienstView(self))
         self.add_view(views.AufstellungView(self))
+        self.add_view(views.BossLagerView(self))
+        self.add_view(views.NormalesLagerView(self))
         self.add_view(views.LagerView(self))
         self.add_view(views.SanktionView(self))
         self.add_view(views.AusruestungView(self))
@@ -180,7 +183,9 @@ class ClubBot(commands.Bot):
             "katalog": (lambda: panels.embed_katalog(self.db), lambda: None),
             "sanktionen": (lambda: panels.embed_sanktionen(guild, self.db), lambda: views.SanktionView(self)),
             "ausruestung": (lambda: panels.embed_ausruestung(guild, self.db), lambda: views.AusruestungView(self)),
-            "lager": (lambda: panels.embed_lager(self.db), lambda: views.LagerView(self)),
+            "bosslager": (lambda: panels.embed_boss_lager(self.db), lambda: views.BossLagerView(self)),
+            "normaleslager": (lambda: panels.embed_normales_lager(self.db), lambda: views.NormalesLagerView(self)),
+            "lager": (lambda: panels.embed_normales_lager(self.db), lambda: views.LagerView(self)),
             "urlaub": (lambda: panels.embed_urlaub(guild, self.db), lambda: views.UrlaubView(self)),
             "infos": (lambda: panels.embed_infos(self.db), lambda: None),
             "arbeiter": (lambda: panels.embed_arbeiter(guild, self.db), lambda: views.ArbeiterView(self)),
@@ -235,7 +240,7 @@ class ClubBot(commands.Bot):
     async def refresh_panels(self, guild: discord.Guild, names=None):
         targets = names or [
             "mitarbeiter", "memberliste", "rang", "aufstellung", "dienst", "katalog",
-            "sanktionen", "ausruestung", "lager", "urlaub", "infos", "arbeiter",
+            "sanktionen", "ausruestung", "bosslager", "normaleslager", "urlaub", "infos", "arbeiter",
             "tickets", "regeln", "status", "aktivitaet", "notizen", "blacklist",
             "pflicht", "routen", "einkauf", "routecheck", "lootdrop", "rollenanfrage",
             "rollenbestaetigen", "clipantrag", "abgaben", "kasse"

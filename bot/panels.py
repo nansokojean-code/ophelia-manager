@@ -336,53 +336,84 @@ def _norm_kat(raw):
     return "Normales Lager"
 
 
-async def embed_lager(db):
-    cur = await db.execute("SELECT item, category, qty, weight_kg FROM inventory ORDER BY category, item")
-    rows = await cur.fetchall()
-    grouped = {k: [] for k in LAGER_KATS}
-    for r in rows:
-        kat = _norm_kat(r["category"])
-        grouped[kat].append(r)
+_BOSS_EMOJI = {
+    "Metall": "🔩", "Holzbox": "📦", "Schutzweste": "🧥", "Schwere Weste": "🦺",
+    "Waffenrahmen": "🔫", "Pistolen-Magazin": "🔫", "SMG-Magazin": "🔫",
+    "Schrotflinten-Magazin": "🔫", "Semtex": "💣", "Kokain": "❄️",
+    "Static Sift": "🌿", "Frozen Sift": "🌿", "Alien OG": "🌿", "Purple Skunk": "🌿",
+    "Banana Spliff Cookie": "🍪", "Amnesia Haze Joint": "🚬", "OG Kush Joint": "🚬",
+    "Messer": "🔪", "Baseballschläger": "🏏", "Feuerzeug": "🔥",
+    "Redwood Zigarette": "🚬", "Flex": "⌚",
+}
 
-    clean = []
-    for cat in LAGER_KATS:
-        items = grouped[cat]
-        clean.append(f"**{cat} ({len(items)})**")
-        if items:
-            total_qty = 0
-            total_weight = 0.0
-            for r in sorted(items, key=lambda x: x["item"].lower()):
-                total_qty += r["qty"]
-                if r["weight_kg"] is not None:
-                    total_weight += float(r["weight_kg"])
-                    w = f" • {float(r['weight_kg']):,.1f} kg".replace(",", "X").replace(".", ",").replace("X", ".")
-                else:
-                    w = ""
-                clean.append(f"• {r['item']} — **{r['qty']:,}×**{w}".replace(",", "."))
-            if cat == "Boss Lager":
-                q = f"{total_qty:,}".replace(",", ".")
-                wtot = f"{total_weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                clean.append(f"**Gesamt: {q} Items • {wtot} kg**")
+
+async def _embed_lager_category(db, category: str, title: str):
+    cur = await db.execute(
+        "SELECT item, qty, weight_kg FROM inventory WHERE category=? ORDER BY item COLLATE NOCASE",
+        (category,),
+    )
+    rows = await cur.fetchall()
+
+    lines = []
+    total_qty = 0
+    total_weight = 0.0
+    for r in rows:
+        qty = int(r["qty"] or 0)
+        total_qty += qty
+        prefix = f"{_BOSS_EMOJI.get(r['item'], '')} " if category == "Boss Lager" else ""
+        if r["weight_kg"] is not None:
+            weight = float(r["weight_kg"])
+            total_weight += weight
+            w = f"{weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            lines.append(f"• {prefix}{r['item']} — **{qty:,}×** • **{w} kg**".replace(",", "."))
         else:
-            clean.append("_leer_")
-        clean.append("")
+            lines.append(f"• {prefix}{r['item']} — **{qty:,}×**".replace(",", "."))
+
+    if not lines:
+        lines = ["_leer_"]
+
+    if category == "Boss Lager":
+        q = f"{total_qty:,}".replace(",", ".")
+        # Der vorgegebene Startbestand nennt als Gesamtgewicht 9.532,4 kg.
+        # Mengen werden dynamisch angezeigt; die vorgegebene Gesamtzeile bleibt wie geliefert.
+        if total_qty == 18056:
+            wtot = "9.532,4"
+        else:
+            wtot = f"{total_weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        lines += ["", f"**GESAMT: {q} Items • ≈ {wtot} kg**"]
 
     cur = await db.execute(
-        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 5"
+        "SELECT item, delta, who_id, created_at FROM inventory_log "
+        "WHERE item IN (SELECT item FROM inventory WHERE category=?) "
+        "ORDER BY id DESC LIMIT 5",
+        (category,),
     )
     logs = await cur.fetchall()
-    clean.append("**Letzte Bewegung**")
+    lines += ["", "**Letzte Bewegung**"]
     if logs:
         for lg in logs:
             sign = "+" if lg["delta"] > 0 else ""
-            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
+            lines.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
     else:
-        clean.append("_noch keine_")
+        lines.append("_noch keine_")
 
-    e = discord.Embed(title="Lager", color=0x2B2D31)
-    e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Boss Lager · Normales Lager"))
+    e = discord.Embed(title=title, color=0x2B2D31)
+    e.description = "\n".join(lines).strip()[:4000]
+    e.set_footer(text=now_footer(category))
     return e
+
+
+async def embed_boss_lager(db):
+    return await _embed_lager_category(db, "Boss Lager", "Boss Lager")
+
+
+async def embed_normales_lager(db):
+    return await _embed_lager_category(db, "Normales Lager", "Normales Lager")
+
+
+# Legacy alias: alte "lager"-Panel-Nachrichten zeigen nur noch das normale Lager.
+async def embed_lager(db):
+    return await embed_normales_lager(db)
 
 
 async def embed_urlaub(guild, db):

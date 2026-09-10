@@ -276,6 +276,14 @@ async def init(db: aiosqlite.Connection):
         ("aufstellung", "abmelden", "Abmelden", "danger", 1, 20),
         ("aufstellung", "refresh", "Aktualisieren", "secondary", 1, 30),
         ("aufstellung", "shift", "Verschieben", "primary", 1, 40),
+        ("bosslager", "in", "Reinlegen", "success", 1, 10),
+        ("bosslager", "out", "Rausnehmen", "danger", 1, 20),
+        ("bosslager", "new", "Gegenstand anlegen", "primary", 1, 30),
+        ("bosslager", "refresh", "Aktualisieren", "secondary", 1, 40),
+        ("normaleslager", "in", "Reinlegen", "success", 1, 10),
+        ("normaleslager", "out", "Rausnehmen", "danger", 1, 20),
+        ("normaleslager", "new", "Gegenstand anlegen", "primary", 1, 30),
+        ("normaleslager", "refresh", "Aktualisieren", "secondary", 1, 40),
     ]
     # V6.2.2: optionales Gewicht fuer Lagerbestand
     cols = await (await db.execute("PRAGMA table_info(inventory)")).fetchall()
@@ -300,7 +308,7 @@ async def init(db: aiosqlite.Connection):
         await set_setting(db, "rules_seed", "2")
 
     # V6.2.2: Boss-Lager und normales Lager mit festgelegtem Startbestand
-    lager_seed = await get_setting(db, "lager_seed_v3", "0")
+    lager_seed = await get_setting(db, "lager_seed_v4", "0")
     if lager_seed != "1":
         boss_items = [
             ("Metall", 17274, 8637.0), ("Holzbox", 92, 92.0),
@@ -337,7 +345,7 @@ async def init(db: aiosqlite.Connection):
             "INSERT INTO inventory(item, category, qty, weight_kg) VALUES(?, 'Normales Lager', ?, NULL)",
             normal_items,
         )
-        await set_setting(db, "lager_seed_v3", "1")
+        await set_setting(db, "lager_seed_v4", "1")
         await set_setting(db, "lager_cleared", "1")
         await db.commit()
 
@@ -372,7 +380,8 @@ async def init(db: aiosqlite.Connection):
         ("katalog", "Sanktionskatalog"),
         ("sanktionen", "Sanktionen"),
         ("ausruestung", "Ausrüstung / Mitglieder"),
-        ("lager", "Lager"),
+        ("bosslager", "Boss Lager"),
+        ("normaleslager", "Normales Lager"),
         ("urlaub", "Urlaub"),
         ("infos", "Information"),
         ("arbeiter", "Arbeiter"),
