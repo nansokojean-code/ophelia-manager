@@ -111,9 +111,52 @@ async def embed_rangsystem_users(guild):
 async def embed_aufstellung(guild, db):
     import database as dbmod
     zeit = await dbmod.get_setting(db, f"aufstellung_time:{guild.id}", "18:00")
-    e = await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
-    head = f"**Heute um {zeit} Uhr Aufstellung.**\nSeid pünktlich da.\n\n"
-    e.description = head + (e.description or "")
+    title = await dbmod.get_setting(db, f"aufstellung_title:{guild.id}", "Aufstellung")
+    intro = await dbmod.get_setting(db, f"aufstellung_description:{guild.id}", "Seid pünktlich da.")
+    ping_name = await dbmod.get_setting(db, f"aufstellung_ping:{guild.id}", "Ophelia")
+    footer = await dbmod.get_setting(db, f"aufstellung_footer:{guild.id}", "Automatische Aktualisierung · Buttons unten")
+    color_raw = await dbmod.get_setting(db, f"aufstellung_color:{guild.id}", "#2B2D31")
+    layout = await dbmod.get_setting(db, f"aufstellung_layout:{guild.id}", "embed")
+    try:
+        color = int((color_raw or "#2B2D31").lstrip("#"), 16)
+    except ValueError:
+        color = 0x2B2D31
+    cur = await db.execute("SELECT user_id, status, reason FROM attendance")
+    rows = {r["user_id"]: r for r in await cur.fetchall()}
+    buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
+    for m in staff_members(guild):
+        row = rows.get(m.id); st = row["status"] if row else "offen"
+        if st not in buckets: st = "offen"
+        buckets[st].append((m, row["reason"] if row else None))
+    role = discord.utils.get(guild.roles, name=ping_name) if ping_name else None
+    ping_text = role.mention if role else (ping_ophelia(guild) if ping_name else "")
+    e = discord.Embed(title=title or "Aufstellung", color=color)
+    head = f"**Heute um {zeit} Uhr Aufstellung.**\n{intro}".strip()
+    labels = [("Angemeldet","angemeldet"),("Abgemeldet","abgemeldet"),("Offen","offen")]
+    if layout == "table":
+        lines = [head, "", ping_text, "", "```", "STATUS       RANG  NAME"]
+        for label,key in labels:
+            for m, reason in sorted(buckets[key], key=lambda x:x[0].display_name.lower()):
+                rank = highest_rank(m) or "-"
+                lines.append(f"{label[:11]:11} {rank[:5]:5} {m.display_name[:24]}")
+        lines.append("```")
+        e.description = "\n".join(lines)[:4000]
+    elif layout == "compact":
+        parts=[head, "", ping_text]
+        for label,key in labels:
+            names = [display_line(m) for m,_ in sorted(buckets[key], key=lambda x:x[0].display_name.lower())]
+            parts += ["", f"**{label} ({len(names)})**", " · ".join(names) if names else "_niemand_"]
+        e.description="\n".join(parts)[:4000]
+    else:
+        parts=[head, "", ping_text]
+        for label,key in labels:
+            items=sorted(buckets[key], key=lambda x:x[0].display_name.lower())
+            lines=[f"**{label} ({len(items)})**"]
+            lines += [display_line(m) + (f"   Grund: {reason}" if reason and key=="abgemeldet" else "") for m,reason in items]
+            if not items: lines.append("_niemand_")
+            parts += ["", "\n".join(lines)]
+        e.description="\n".join(parts)[:4000]
+    e.set_footer(text=footer or now_footer("Buttons unten"))
     return e
 
 
@@ -283,20 +326,18 @@ async def embed_ausruestung(guild, db):
     return e
 
 
-LAGER_KATS = ("Essen", "Trinken", "Sonstiges")
+LAGER_KATS = ("Boss Lager", "Normales Lager")
 
 
 def _norm_kat(raw):
     t = (raw or "").strip().lower()
-    if t in {"essen", "food", "foods", "nahrung"}:
-        return "Essen"
-    if t in {"trinken", "drink", "drinks", "getränke", "getraenke"}:
-        return "Trinken"
-    return "Sonstiges"
+    if t in {"boss", "boss lager", "bosslager"}:
+        return "Boss Lager"
+    return "Normales Lager"
 
 
 async def embed_lager(db):
-    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY item")
+    cur = await db.execute("SELECT item, category, qty, weight_kg FROM inventory ORDER BY category, item")
     rows = await cur.fetchall()
     grouped = {k: [] for k in LAGER_KATS}
     for r in rows:
@@ -308,9 +349,20 @@ async def embed_lager(db):
         items = grouped[cat]
         clean.append(f"**{cat} ({len(items)})**")
         if items:
-            for r in items:
-                qty = f"{int(r['qty']):,}".replace(",", ".")
-                clean.append(f"• {r['item']}  —  **{qty}**")
+            total_qty = 0
+            total_weight = 0.0
+            for r in sorted(items, key=lambda x: x["item"].lower()):
+                total_qty += r["qty"]
+                if r["weight_kg"] is not None:
+                    total_weight += float(r["weight_kg"])
+                    w = f" • {float(r['weight_kg']):,.1f} kg".replace(",", "X").replace(".", ",").replace("X", ".")
+                else:
+                    w = ""
+                clean.append(f"• {r['item']} — **{r['qty']:,}×**{w}".replace(",", "."))
+            if cat == "Boss Lager":
+                q = f"{total_qty:,}".replace(",", ".")
+                wtot = f"{total_weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                clean.append(f"**Gesamt: {q} Items • {wtot} kg**")
         else:
             clean.append("_leer_")
         clean.append("")
@@ -329,62 +381,7 @@ async def embed_lager(db):
 
     e = discord.Embed(title="Lager", color=0x2B2D31)
     e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
-    return e
-
-
-async def embed_boss_lager(db):
-    cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY rowid")
-    rows = await cur.fetchall()
-
-    # Kategorien sind im Boss-Lager frei anlegbar. Leere Kategorien bleiben sichtbar.
-    cur = await db.execute("SELECT name FROM boss_inventory_categories ORDER BY rowid")
-    cat_rows = await cur.fetchall()
-    categories = [r["name"] for r in cat_rows if str(r["name"]).strip()]
-
-    # Falls alte Daten Kategorien enthalten, die noch nicht in der Kategorietabelle stehen,
-    # werden sie trotzdem angezeigt.
-    for r in rows:
-        cat = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
-        if not any(cat.lower() == existing.lower() for existing in categories):
-            categories.append(cat)
-
-    if not categories:
-        categories = ["Sonstiges"]
-
-    grouped = {cat: [] for cat in categories}
-    for r in rows:
-        raw = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
-        cat = next((c for c in categories if c.lower() == raw.lower()), raw)
-        grouped.setdefault(cat, []).append(r)
-
-    clean = []
-    for cat in categories:
-        items = grouped.get(cat, [])
-        clean.append(f"**{cat} ({len(items)})**")
-        if items:
-            for r in items:
-                qty = f"{int(r['qty']):,}".replace(",", ".")
-                clean.append(f"• {r['item']}  —  **{qty}**")
-        else:
-            clean.append("_leer_")
-        clean.append("")
-
-    cur = await db.execute(
-        "SELECT item, delta, who_id, created_at FROM boss_inventory_log ORDER BY id DESC LIMIT 5"
-    )
-    logs = await cur.fetchall()
-    clean.append("**Letzte Bewegung**")
-    if logs:
-        for lg in logs:
-            sign = "+" if lg["delta"] > 0 else ""
-            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
-    else:
-        clean.append("_noch keine_")
-
-    e = discord.Embed(title="Boss Menü Lager", color=0x2B2D31)
-    e.description = "\n".join(clean).strip()
-    e.set_footer(text=now_footer("Kategorien: " + " · ".join(categories)))
+    e.set_footer(text=now_footer("Boss Lager · Normales Lager"))
     return e
 
 
@@ -543,10 +540,16 @@ async def embed_pflicht():
 
 
 async def embed_routes(db):
-    # Das Panel dient nur noch als Steuerung. Eingetragene Routen werden
-    # nach dem Bestätigen als normale Discord-Nachricht in den Kanal gepostet.
+    try:
+        cur = await db.execute("SELECT name, amount FROM routes ORDER BY id")
+        rows = await cur.fetchall()
+        lines = [f"• **{r['name']}** — {r['amount'] or '-'}" for r in rows]
+    except Exception:
+        cur = await db.execute("SELECT name FROM routes ORDER BY id")
+        rows = await cur.fetchall()
+        lines = [f"• {r['name']}" for r in rows]
     e = discord.Embed(title="Unsere Route", color=0x2B2D31)
-    e.description = "_Route über **Route eintragen** posten._"
+    e.description = "\n".join(lines) or "_keine Route_"
     e.set_footer(text=now_footer("Website"))
     return e
 

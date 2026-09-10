@@ -21,6 +21,58 @@ async def init(db: aiosqlite.Connection):
             value TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS web_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            must_change_password INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS web_sessions (
+            token TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            expires_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES web_users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS web_builder_panels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_key TEXT UNIQUE NOT NULL,
+            label TEXT NOT NULL,
+            title_override TEXT NOT NULL DEFAULT '',
+            description_override TEXT NOT NULL DEFAULT '',
+            source TEXT NOT NULL DEFAULT 'bot',
+            color_hex TEXT NOT NULL DEFAULT '#5865F2',
+            footer_text TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS web_panel_buttons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_key TEXT NOT NULL,
+            button_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            style TEXT NOT NULL DEFAULT 'secondary',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(panel_key, button_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS web_button_roles (
+            panel_key TEXT NOT NULL,
+            button_key TEXT NOT NULL,
+            role_id INTEGER NOT NULL,
+            PRIMARY KEY(panel_key, button_key, role_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS web_module_settings (
+            panel_key TEXT PRIMARY KEY,
+            module_enabled INTEGER NOT NULL DEFAULT 1,
+            image_enabled INTEGER NOT NULL DEFAULT 1
+        );
+
         CREATE TABLE IF NOT EXISTS panels (
             name TEXT PRIMARY KEY,
             channel_id INTEGER,
@@ -71,25 +123,6 @@ async def init(db: aiosqlite.Connection):
         );
 
         CREATE TABLE IF NOT EXISTS inventory_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            item TEXT NOT NULL,
-            delta INTEGER NOT NULL,
-            who_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS boss_inventory (
-            item TEXT PRIMARY KEY,
-            category TEXT NOT NULL DEFAULT 'Sonstiges',
-            qty INTEGER NOT NULL DEFAULT 0
-        );
-
-        CREATE TABLE IF NOT EXISTS boss_inventory_categories (
-            name TEXT PRIMARY KEY COLLATE NOCASE,
-            created_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS boss_inventory_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             item TEXT NOT NULL,
             delta INTEGER NOT NULL,
@@ -191,67 +224,70 @@ async def init(db: aiosqlite.Connection):
         );
         """
     )
-    # Vorhandene Boss-Lager-Kategorien aus Gegenständen übernehmen.
-    # Keine festen Standard-Kategorien bei jedem Start neu anlegen, damit gelöschte Kategorien gelöscht bleiben.
-    await db.execute(
-        "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) "
-        "SELECT DISTINCT category, datetime('now') FROM boss_inventory "
-        "WHERE category IS NOT NULL AND trim(category) <> ''"
+    # V4 Universal Studio migrations: keep old databases compatible.
+    cols = {r[1] for r in await (await db.execute("PRAGMA table_info(web_builder_panels)")).fetchall()}
+    migrations = {
+        "message_type": "TEXT NOT NULL DEFAULT 'embed'",
+        "content_text": "TEXT NOT NULL DEFAULT ''",
+        "image_path": "TEXT NOT NULL DEFAULT ''",
+        "thumbnail_path": "TEXT NOT NULL DEFAULT ''",
+        "image_url": "TEXT NOT NULL DEFAULT ''",
+        "thumbnail_url": "TEXT NOT NULL DEFAULT ''",
+        "layout": "TEXT NOT NULL DEFAULT 'embed'",
+        "auto_send": "INTEGER NOT NULL DEFAULT 0",
+        "schedule_time": "TEXT NOT NULL DEFAULT ''",
+        "schedule_days": "TEXT NOT NULL DEFAULT ''",
+        "schedule_channel_id": "INTEGER",
+    }
+    for name, ddl in migrations.items():
+        if name not in cols:
+            await db.execute(f"ALTER TABLE web_builder_panels ADD COLUMN {name} {ddl}")
+    await db.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS web_setup_fields (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_key TEXT NOT NULL,
+            name TEXT NOT NULL,
+            value TEXT NOT NULL DEFAULT '',
+            inline INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS web_setup_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            style TEXT NOT NULL DEFAULT 'secondary',
+            action_type TEXT NOT NULL DEFAULT 'none',
+            action_value TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        """
     )
+    # Web onboarding migration (safe for existing databases)
+    try:
+        await db.execute("ALTER TABLE web_users ADD COLUMN onboarding_seen INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
     await db.commit()
 
-    # Boss-Menü-Lager: gewünschter Startbestand (einmalige Migration).
-    # Die Versionsmarke verhindert, dass spätere Änderungen am Lager bei jedem Neustart zurückgesetzt werden.
-    boss_seed = await get_setting(db, "boss_inventory_seed", "0")
-    if boss_seed != "2026-09-09-v2":
-        boss_categories = [
-            "Munition & Magazine",
-            "Waffen",
-            "Schutz & Ausrüstung",
-            "Materialien",
-            "Drogen",
-            "Geld",
-        ]
-        boss_items = [
-            ("SMG Magazin", "Munition & Magazine", 48),
-            ("Schrotflinten Magazin", "Munition & Magazine", 25),
-            ("Pistole MK2", "Waffen", 4),
-            ("Pistole", "Waffen", 1),
-            ("Abgesägte Schrotflinte", "Waffen", 1),
-            ("SNS Pistole", "Waffen", 1),
-            ("Messer", "Waffen", 1),
-            ("Brecheisen", "Waffen", 2),
-            ("Schutzweste", "Schutz & Ausrüstung", 22),
-            ("Schwere Weste", "Schutz & Ausrüstung", 13),
-            ("Metall", "Materialien", 7295),
-            ("Waffenrahmen", "Materialien", 24),
-            ("Polyethylenplatten", "Materialien", 960),
-            ("Baumwolle", "Materialien", 774),
-            ("Semtex", "Materialien", 3),
-            ("Static Sift", "Drogen", 1),
-            ("Frozen Sift", "Drogen", 3),
-            ("Alien OG", "Drogen", 6),
-            ("Purple Skunk", "Drogen", 6),
-            ("Banana Spliff Cookie", "Drogen", 2),
-            ("Amnesia Haze Joint", "Drogen", 3),
-            ("OG Kush Joint", "Drogen", 1),
-            ("Schwarzgeld", "Geld", 370316),
-        ]
-        await db.execute("DELETE FROM boss_inventory")
-        await db.execute("DELETE FROM boss_inventory_categories")
-        await db.executemany(
-            "INSERT INTO boss_inventory_categories(name, created_at) VALUES(?, datetime('now'))",
-            [(name,) for name in boss_categories],
-        )
-        await db.executemany(
-            "INSERT INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
-            boss_items,
-        )
-        await db.execute(
-            "INSERT INTO settings(key, value) VALUES('boss_inventory_seed', '2026-09-09-v2') "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
-        )
-        await db.commit()
+    button_seed = [
+        ("aufstellung", "anmelden", "Anmelden", "success", 1, 10),
+        ("aufstellung", "abmelden", "Abmelden", "danger", 1, 20),
+        ("aufstellung", "refresh", "Aktualisieren", "secondary", 1, 30),
+        ("aufstellung", "shift", "Verschieben", "primary", 1, 40),
+    ]
+    # V6.2.2: optionales Gewicht fuer Lagerbestand
+    cols = await (await db.execute("PRAGMA table_info(inventory)")).fetchall()
+    if not any(row[1] == "weight_kg" for row in cols):
+        await db.execute("ALTER TABLE inventory ADD COLUMN weight_kg REAL")
+
+    await db.executemany(
+        "INSERT INTO web_panel_buttons(panel_key,button_key,label,style,enabled,sort_order) VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(panel_key,button_key) DO NOTHING",
+        button_seed,
+    )
+    await db.commit()
 
     seeded = await get_setting(db, "rules_seed", "0")
     if seeded != "2":
@@ -263,43 +299,47 @@ async def init(db: aiosqlite.Connection):
         )
         await set_setting(db, "rules_seed", "2")
 
-    # Lager einmalig mit den Gegenständen vom Bild befüllen
-    lager_seed = await get_setting(db, "lager_seed_v2", "0")
+    # V6.2.2: Boss-Lager und normales Lager mit festgelegtem Startbestand
+    lager_seed = await get_setting(db, "lager_seed_v3", "0")
     if lager_seed != "1":
-        seed_items = [
-            # Essen
-            ("Crunchy Chicken Burger", "Essen", 165),
-            ("Tiramisu", "Essen", 50),
-            ("Rinderfilet Steak", "Essen", 95),
-            ("Rumpsteak", "Essen", 90),
-            ("Pecan Pie Cake", "Essen", 50),
-            ("Rib Eye Steak", "Essen", 100),
-            ("Caesar Salat", "Essen", 80),
-            ("Pancakes", "Essen", 45),
-            ("Lachs", "Essen", 9),
-            ("Bachforelle", "Essen", 8),
-            # Trinken
-            ("Ayran Kirsch", "Trinken", 24),
-            ("Mineralwasser", "Trinken", 36),
-            ("Bubble Tea", "Trinken", 10),
-            ("Energy Drink", "Trinken", 24),
-            # Sonstiges
-            ("OG Kush Joint", "Sonstiges", 2),
-            ("GPS", "Sonstiges", 13),
-            ("Klebeband", "Sonstiges", 2),
-            ("Kupfererz", "Sonstiges", 51),
-            ("Sack", "Sonstiges", 5),
-            ("Schrott", "Sonstiges", 11),
-            ("Schere", "Sonstiges", 4),
+        boss_items = [
+            ("Metall", 17274, 8637.0), ("Holzbox", 92, 92.0),
+            ("Schutzweste", 87, 174.0), ("Schwere Weste", 10, 50.0),
+            ("Waffenrahmen", 24, 7.2), ("Pistolen-Magazin", 25, 25.0),
+            ("SMG-Magazin", 40, 40.0), ("Schrotflinten-Magazin", 20, 20.0),
+            ("Semtex", 5, 10.0), ("Kokain", 450, 450.0),
+            ("Static Sift", 1, 1.0), ("Frozen Sift", 3, 3.0),
+            ("Alien OG", 6, 6.0), ("Purple Skunk", 6, 6.0),
+            ("Banana Spliff Cookie", 2, 1.0), ("Amnesia Haze Joint", 3, 1.5),
+            ("OG Kush Joint", 1, 0.5), ("Messer", 1, 2.0),
+            ("Baseballschläger", 1, 2.0), ("Feuerzeug", 1, 0.2),
+            ("Redwood Zigarette", 3, 0.0), ("Flex", 1, 3.0),
         ]
-        for name, kat, qty in seed_items:
-            await db.execute(
-                "INSERT INTO inventory(item, category, qty) VALUES(?, ?, ?) "
-                "ON CONFLICT(item) DO UPDATE SET category=excluded.category, qty=excluded.qty",
-                (name, kat, qty),
-            )
-        await set_setting(db, "lager_seed_v2", "1")
+        normal_items = [
+            ("Hotdog",70), ("Energy Drink",15), ("Caesar Salat",31),
+            ("Pecan Pie Cake",50), ("Rinderfilet Steak",52), ("Rumpsteak",41),
+            ("Crunchy Chicken Burger",5), ("Tiramisu",270), ("Erdbeerkuchen",200),
+            ("Rib Eye Steak",80), ("Whisky",72), ("Bier",20),
+            ("Sprayentferner",28), ("Klammerpflaster",1), ("Sex on the Beach",81),
+            ("Handschellen",4), ("Notfallwiederbelebungsset",1), ("Cola",80),
+            ("Klebeband",2), ("Bachforelle",8), ("Kupfererz",51), ("Sack",5),
+            ("Schrott",11), ("Lachs",9), ("Eistee",40), ("Brot",71),
+            ("Mojito",83), ("Teddybear",5), ("Kondom",6), ("Rose",4),
+            ("Blumenstrauss",5), ("Softeis – Schokolade",20),
+        ]
+        # Gewuenschter Bestand ersetzt den bisherigen Lager-Seed vollstaendig.
+        await db.execute("DELETE FROM inventory")
+        await db.executemany(
+            "INSERT INTO inventory(item, category, qty, weight_kg) VALUES(?, 'Boss Lager', ?, ?)",
+            boss_items,
+        )
+        await db.executemany(
+            "INSERT INTO inventory(item, category, qty, weight_kg) VALUES(?, 'Normales Lager', ?, NULL)",
+            normal_items,
+        )
+        await set_setting(db, "lager_seed_v3", "1")
         await set_setting(db, "lager_cleared", "1")
+        await db.commit()
 
     cur = await db.execute("SELECT COUNT(*) AS c FROM equipment_items")
     if (await cur.fetchone())["c"] == 0:
@@ -321,14 +361,49 @@ async def init(db: aiosqlite.Connection):
         await db.execute("ALTER TABLE routes ADD COLUMN amount TEXT DEFAULT ''")
     except Exception:
         pass
-    try:
-        await db.execute("ALTER TABLE routes ADD COLUMN message_id INTEGER")
-    except Exception:
-        pass
-    try:
-        await db.execute("ALTER TABLE routes ADD COLUMN channel_id INTEGER")
-    except Exception:
-        pass
+
+    # Vorhandene Discord-Panels automatisch in den Web-Builder übernehmen.
+    legacy_panels = [
+        ("mitarbeiter", "Mitarbeiter"),
+        ("memberliste", "Memberliste"),
+        ("rang", "Rangsystem"),
+        ("aufstellung", "Aufstellung"),
+        ("dienst", "Dienst / Abmeldung"),
+        ("katalog", "Sanktionskatalog"),
+        ("sanktionen", "Sanktionen"),
+        ("ausruestung", "Ausrüstung / Mitglieder"),
+        ("lager", "Lager"),
+        ("urlaub", "Urlaub"),
+        ("infos", "Information"),
+        ("arbeiter", "Arbeiter"),
+        ("tickets", "Tickets"),
+        ("regeln", "Regeln"),
+        ("status", "Clubstatus"),
+        ("aktivitaet", "Aktivitätscheck"),
+        ("notizen", "Notizen"),
+        ("blacklist", "Blacklist"),
+        ("pflicht", "Pflicht-Ausrüstungen"),
+        ("routen", "Unsere Route"),
+        ("einkauf", "Eingekauft"),
+        ("routecheck", "Routenkontrolle"),
+        ("lootdrop", "Lootdrop abgeben"),
+        ("rollenanfrage", "Rollenanfrage"),
+        ("rollenbestaetigen", "Rollen bestätigen"),
+        ("clipantrag", "Kill-Clip beantragen"),
+        ("abgaben", "Abgaben"),
+        ("kasse", "Frakkasse"),
+    ]
+    for order, (panel_key, label) in enumerate(legacy_panels, start=1):
+        await db.execute(
+            "INSERT INTO web_builder_panels(panel_key,label,source,sort_order) VALUES(?,?, 'bot', ?) "
+            "ON CONFLICT(panel_key) DO UPDATE SET label=excluded.label, sort_order=excluded.sort_order WHERE web_builder_panels.source='bot'",
+            (panel_key, label, order),
+        )
+        await db.execute(
+            "INSERT INTO web_module_settings(panel_key,module_enabled,image_enabled) VALUES(?,1,1) "
+            "ON CONFLICT(panel_key) DO NOTHING",
+            (panel_key,),
+        )
     await db.commit()
 
 
