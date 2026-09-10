@@ -346,6 +346,53 @@ _BOSS_EMOJI = {
     "Redwood Zigarette": "🚬", "Flex": "⌚",
 }
 
+_BOSS_GROUPS = {
+    "🧱 Materialien": {"Metall", "Holzbox", "Waffenrahmen"},
+    "🛡️ Schutz & Ausrüstung": {"Schutzweste", "Schwere Weste"},
+    "🔫 Waffen & Magazine": {
+        "Pistolen-Magazin", "SMG-Magazin", "Schrotflinten-Magazin",
+        "Semtex", "Messer", "Baseballschläger",
+    },
+    "🌿 Drogen & Rauchwaren": {
+        "Kokain", "Static Sift", "Frozen Sift", "Alien OG", "Purple Skunk",
+        "Banana Spliff Cookie", "Amnesia Haze Joint", "OG Kush Joint",
+        "Redwood Zigarette",
+    },
+    "📦 Sonstiges": {"Feuerzeug", "Flex"},
+}
+
+_NORMAL_GROUPS = {
+    "🍔 Essen": {
+        "Hotdog", "Caesar Salat", "Pecan Pie Cake", "Rinderfilet Steak",
+        "Rumpsteak", "Crunchy Chicken Burger", "Tiramisu", "Erdbeerkuchen",
+        "Rib Eye Steak", "Brot", "Softeis – Schokolade",
+    },
+    "🥤 Getränke": {
+        "Energy Drink", "Whisky", "Bier", "Sex on the Beach", "Cola",
+        "Eistee", "Mojito",
+    },
+    "🩹 Medizin & Hilfe": {
+        "Klammerpflaster", "Notfallwiederbelebungsset", "Kondom",
+    },
+    "⛏️ Materialien & Rohstoffe": {
+        "Kupfererz", "Schrott", "Sack", "Klebeband",
+    },
+    "🐟 Fisch": {
+        "Bachforelle", "Lachs",
+    },
+    "🎁 Sonstiges": {
+        "Sprayentferner", "Handschellen", "Teddybear", "Rose", "Blumenstrauss",
+    },
+}
+
+
+def _group_for_item(item: str, category: str) -> str:
+    groups = _BOSS_GROUPS if category == "Boss Lager" else _NORMAL_GROUPS
+    for group_name, items in groups.items():
+        if item in items:
+            return group_name
+    return "📦 Sonstiges" if category == "Boss Lager" else "🎁 Sonstiges"
+
 
 async def _embed_lager_category(db, category: str, title: str):
     cur = await db.execute(
@@ -354,33 +401,57 @@ async def _embed_lager_category(db, category: str, title: str):
     )
     rows = await cur.fetchall()
 
-    lines = []
+    groups = _BOSS_GROUPS if category == "Boss Lager" else _NORMAL_GROUPS
+    grouped = {name: [] for name in groups}
+    fallback = "📦 Sonstiges" if category == "Boss Lager" else "🎁 Sonstiges"
+    grouped.setdefault(fallback, [])
+
     total_qty = 0
     total_weight = 0.0
+
     for r in rows:
         qty = int(r["qty"] or 0)
         total_qty += qty
-        prefix = f"{_BOSS_EMOJI.get(r['item'], '')} " if category == "Boss Lager" else ""
         if r["weight_kg"] is not None:
-            weight = float(r["weight_kg"])
-            total_weight += weight
-            w = f"{weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-            lines.append(f"• {prefix}{r['item']} — **{qty:,}×** • **{w} kg**".replace(",", "."))
-        else:
-            lines.append(f"• {prefix}{r['item']} — **{qty:,}×**".replace(",", "."))
+            total_weight += float(r["weight_kg"])
+        grouped.setdefault(_group_for_item(r["item"], category), []).append(r)
 
-    if not lines:
+    lines = []
+    for group_name in groups:
+        items = grouped.get(group_name, [])
+        if not items:
+            continue
+        lines.append(f"**{group_name}**")
+        for r in sorted(items, key=lambda x: x["item"].lower()):
+            qty = int(r["qty"] or 0)
+            prefix = f"{_BOSS_EMOJI.get(r['item'], '')} " if category == "Boss Lager" else ""
+            if r["weight_kg"] is not None:
+                weight = float(r["weight_kg"])
+                w = f"{weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                lines.append(f"• {prefix}{r['item']} — **{qty:,}×** • **{w} kg**".replace(",", "."))
+            else:
+                lines.append(f"• {prefix}{r['item']} — **{qty:,}×**".replace(",", "."))
+        lines.append("")
+
+    # Unbekannte/neue Gegenstände landen automatisch in Sonstiges.
+    known = set().union(*groups.values()) if groups else set()
+    extra = [r for r in rows if r["item"] not in known]
+    if extra and fallback not in groups:
+        lines.append(f"**{fallback}**")
+        for r in sorted(extra, key=lambda x: x["item"].lower()):
+            lines.append(f"• {r['item']} — **{int(r['qty'] or 0):,}×**".replace(",", "."))
+        lines.append("")
+
+    if not rows:
         lines = ["_leer_"]
 
     if category == "Boss Lager":
         q = f"{total_qty:,}".replace(",", ".")
-        # Der vorgegebene Startbestand nennt als Gesamtgewicht 9.532,4 kg.
-        # Mengen werden dynamisch angezeigt; die vorgegebene Gesamtzeile bleibt wie geliefert.
         if total_qty == 18056:
             wtot = "9.532,4"
         else:
             wtot = f"{total_weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        lines += ["", f"**GESAMT: {q} Items • ≈ {wtot} kg**"]
+        lines += [f"**GESAMT: {q} Items • ≈ {wtot} kg**", ""]
 
     cur = await db.execute(
         "SELECT item, delta, who_id, created_at FROM inventory_log "
@@ -389,7 +460,7 @@ async def _embed_lager_category(db, category: str, title: str):
         (category,),
     )
     logs = await cur.fetchall()
-    lines += ["", "**Letzte Bewegung**"]
+    lines.append("**🕘 Letzte Bewegungen**")
     if logs:
         for lg in logs:
             sign = "+" if lg["delta"] > 0 else ""
