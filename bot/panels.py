@@ -111,52 +111,9 @@ async def embed_rangsystem_users(guild):
 async def embed_aufstellung(guild, db):
     import database as dbmod
     zeit = await dbmod.get_setting(db, f"aufstellung_time:{guild.id}", "18:00")
-    title = await dbmod.get_setting(db, f"aufstellung_title:{guild.id}", "Aufstellung")
-    intro = await dbmod.get_setting(db, f"aufstellung_description:{guild.id}", "Seid pünktlich da.")
-    ping_name = await dbmod.get_setting(db, f"aufstellung_ping:{guild.id}", "Ophelia")
-    footer = await dbmod.get_setting(db, f"aufstellung_footer:{guild.id}", "Automatische Aktualisierung · Buttons unten")
-    color_raw = await dbmod.get_setting(db, f"aufstellung_color:{guild.id}", "#2B2D31")
-    layout = await dbmod.get_setting(db, f"aufstellung_layout:{guild.id}", "embed")
-    try:
-        color = int((color_raw or "#2B2D31").lstrip("#"), 16)
-    except ValueError:
-        color = 0x2B2D31
-    cur = await db.execute("SELECT user_id, status, reason FROM attendance")
-    rows = {r["user_id"]: r for r in await cur.fetchall()}
-    buckets = {"angemeldet": [], "abgemeldet": [], "offen": []}
-    for m in staff_members(guild):
-        row = rows.get(m.id); st = row["status"] if row else "offen"
-        if st not in buckets: st = "offen"
-        buckets[st].append((m, row["reason"] if row else None))
-    role = discord.utils.get(guild.roles, name=ping_name) if ping_name else None
-    ping_text = role.mention if role else (ping_ophelia(guild) if ping_name else "")
-    e = discord.Embed(title=title or "Aufstellung", color=color)
-    head = f"**Heute um {zeit} Uhr Aufstellung.**\n{intro}".strip()
-    labels = [("Angemeldet","angemeldet"),("Abgemeldet","abgemeldet"),("Offen","offen")]
-    if layout == "table":
-        lines = [head, "", ping_text, "", "```", "STATUS       RANG  NAME"]
-        for label,key in labels:
-            for m, reason in sorted(buckets[key], key=lambda x:x[0].display_name.lower()):
-                rank = highest_rank(m) or "-"
-                lines.append(f"{label[:11]:11} {rank[:5]:5} {m.display_name[:24]}")
-        lines.append("```")
-        e.description = "\n".join(lines)[:4000]
-    elif layout == "compact":
-        parts=[head, "", ping_text]
-        for label,key in labels:
-            names = [display_line(m) for m,_ in sorted(buckets[key], key=lambda x:x[0].display_name.lower())]
-            parts += ["", f"**{label} ({len(names)})**", " · ".join(names) if names else "_niemand_"]
-        e.description="\n".join(parts)[:4000]
-    else:
-        parts=[head, "", ping_text]
-        for label,key in labels:
-            items=sorted(buckets[key], key=lambda x:x[0].display_name.lower())
-            lines=[f"**{label} ({len(items)})**"]
-            lines += [display_line(m) + (f"   Grund: {reason}" if reason and key=="abgemeldet" else "") for m,reason in items]
-            if not items: lines.append("_niemand_")
-            parts += ["", "\n".join(lines)]
-        e.description="\n".join(parts)[:4000]
-    e.set_footer(text=footer or now_footer("Buttons unten"))
+    e = await embed_dienststatus(guild, db, title="Aufstellung", ping=True)
+    head = f"**Heute um {zeit} Uhr Aufstellung.**\nSeid pünktlich da.\n\n"
+    e.description = head + (e.description or "")
     return e
 
 
@@ -326,165 +283,109 @@ async def embed_ausruestung(guild, db):
     return e
 
 
-LAGER_KATS = ("Boss Lager", "Normales Lager")
+LAGER_KATS = ("Essen", "Trinken", "Sonstiges")
 
 
 def _norm_kat(raw):
     t = (raw or "").strip().lower()
-    if t in {"boss", "boss lager", "bosslager"}:
-        return "Boss Lager"
-    return "Normales Lager"
+    if t in {"essen", "food", "foods", "nahrung"}:
+        return "Essen"
+    if t in {"trinken", "drink", "drinks", "getränke", "getraenke"}:
+        return "Trinken"
+    return "Sonstiges"
 
 
-_BOSS_EMOJI = {
-    "Metall": "🔩", "Holzbox": "📦", "Schutzweste": "🧥", "Schwere Weste": "🦺",
-    "Waffenrahmen": "🔫", "Pistolen-Magazin": "🔫", "SMG-Magazin": "🔫",
-    "Schrotflinten-Magazin": "🔫", "Semtex": "💣", "Kokain": "❄️",
-    "Static Sift": "🌿", "Frozen Sift": "🌿", "Alien OG": "🌿", "Purple Skunk": "🌿",
-    "Banana Spliff Cookie": "🍪", "Amnesia Haze Joint": "🚬", "OG Kush Joint": "🚬",
-    "Messer": "🔪", "Baseballschläger": "🏏", "Feuerzeug": "🔥",
-    "Redwood Zigarette": "🚬", "Flex": "⌚",
-}
-
-_BOSS_GROUPS = {
-    "🧱 Materialien": {"Metall", "Holzbox", "Waffenrahmen"},
-    "🛡️ Schutz & Ausrüstung": {"Schutzweste", "Schwere Weste"},
-    "🔫 Waffen & Magazine": {
-        "Pistolen-Magazin", "SMG-Magazin", "Schrotflinten-Magazin",
-        "Semtex", "Messer", "Baseballschläger",
-    },
-    "🌿 Drogen & Rauchwaren": {
-        "Kokain", "Static Sift", "Frozen Sift", "Alien OG", "Purple Skunk",
-        "Banana Spliff Cookie", "Amnesia Haze Joint", "OG Kush Joint",
-        "Redwood Zigarette",
-    },
-    "📦 Sonstiges": {"Feuerzeug", "Flex"},
-}
-
-_NORMAL_GROUPS = {
-    "🍔 Essen": {
-        "Hotdog", "Caesar Salat", "Pecan Pie Cake", "Rinderfilet Steak",
-        "Rumpsteak", "Crunchy Chicken Burger", "Tiramisu", "Erdbeerkuchen",
-        "Rib Eye Steak", "Brot", "Softeis – Schokolade",
-    },
-    "🥤 Getränke": {
-        "Energy Drink", "Whisky", "Bier", "Sex on the Beach", "Cola",
-        "Eistee", "Mojito",
-    },
-    "🩹 Medizin & Hilfe": {
-        "Klammerpflaster", "Notfallwiederbelebungsset", "Kondom",
-    },
-    "⛏️ Materialien & Rohstoffe": {
-        "Kupfererz", "Schrott", "Sack", "Klebeband",
-    },
-    "🐟 Fisch": {
-        "Bachforelle", "Lachs",
-    },
-    "🎁 Sonstiges": {
-        "Sprayentferner", "Handschellen", "Teddybear", "Rose", "Blumenstrauss",
-    },
-}
-
-
-def _group_for_item(item: str, category: str) -> str:
-    groups = _BOSS_GROUPS if category == "Boss Lager" else _NORMAL_GROUPS
-    for group_name, items in groups.items():
-        if item in items:
-            return group_name
-    return "📦 Sonstiges" if category == "Boss Lager" else "🎁 Sonstiges"
-
-
-async def _embed_lager_category(db, category: str, title: str):
-    cur = await db.execute(
-        "SELECT item, qty, weight_kg FROM inventory WHERE category=? ORDER BY item COLLATE NOCASE",
-        (category,),
-    )
+async def embed_lager(db):
+    cur = await db.execute("SELECT item, category, qty FROM inventory ORDER BY item")
     rows = await cur.fetchall()
-
-    groups = _BOSS_GROUPS if category == "Boss Lager" else _NORMAL_GROUPS
-    grouped = {name: [] for name in groups}
-    fallback = "📦 Sonstiges" if category == "Boss Lager" else "🎁 Sonstiges"
-    grouped.setdefault(fallback, [])
-
-    total_qty = 0
-    total_weight = 0.0
-
+    grouped = {k: [] for k in LAGER_KATS}
     for r in rows:
-        qty = int(r["qty"] or 0)
-        total_qty += qty
-        if r["weight_kg"] is not None:
-            total_weight += float(r["weight_kg"])
-        grouped.setdefault(_group_for_item(r["item"], category), []).append(r)
+        kat = _norm_kat(r["category"])
+        grouped[kat].append(r)
 
-    lines = []
-    for group_name in groups:
-        items = grouped.get(group_name, [])
-        if not items:
-            continue
-        lines.append(f"**{group_name}**")
-        for r in sorted(items, key=lambda x: x["item"].lower()):
-            qty = int(r["qty"] or 0)
-            prefix = f"{_BOSS_EMOJI.get(r['item'], '')} " if category == "Boss Lager" else ""
-            if r["weight_kg"] is not None:
-                weight = float(r["weight_kg"])
-                w = f"{weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                lines.append(f"• {prefix}{r['item']} — **{qty:,}×** • **{w} kg**".replace(",", "."))
-            else:
-                lines.append(f"• {prefix}{r['item']} — **{qty:,}×**".replace(",", "."))
-        lines.append("")
-
-    # Unbekannte/neue Gegenstände landen automatisch in Sonstiges.
-    known = set().union(*groups.values()) if groups else set()
-    extra = [r for r in rows if r["item"] not in known]
-    if extra and fallback not in groups:
-        lines.append(f"**{fallback}**")
-        for r in sorted(extra, key=lambda x: x["item"].lower()):
-            lines.append(f"• {r['item']} — **{int(r['qty'] or 0):,}×**".replace(",", "."))
-        lines.append("")
-
-    if not rows:
-        lines = ["_leer_"]
-
-    if category == "Boss Lager":
-        q = f"{total_qty:,}".replace(",", ".")
-        if total_qty == 18056:
-            wtot = "9.532,4"
+    clean = []
+    for cat in LAGER_KATS:
+        items = grouped[cat]
+        clean.append(f"**{cat} ({len(items)})**")
+        if items:
+            for r in items:
+                qty = f"{int(r['qty']):,}".replace(",", ".")
+                clean.append(f"• {r['item']}  —  **{qty}**")
         else:
-            wtot = f"{total_weight:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        lines += [f"**GESAMT: {q} Items • ≈ {wtot} kg**", ""]
+            clean.append("_leer_")
+        clean.append("")
 
     cur = await db.execute(
-        "SELECT item, delta, who_id, created_at FROM inventory_log "
-        "WHERE item IN (SELECT item FROM inventory WHERE category=?) "
-        "ORDER BY id DESC LIMIT 5",
-        (category,),
+        "SELECT item, delta, who_id, created_at FROM inventory_log ORDER BY id DESC LIMIT 5"
     )
     logs = await cur.fetchall()
-    lines.append("**🕘 Letzte Bewegungen**")
+    clean.append("**Letzte Bewegung**")
     if logs:
         for lg in logs:
             sign = "+" if lg["delta"] > 0 else ""
-            lines.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
+            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
     else:
-        lines.append("_noch keine_")
+        clean.append("_noch keine_")
 
-    e = discord.Embed(title=title, color=0x2B2D31)
-    e.description = "\n".join(lines).strip()[:4000]
-    e.set_footer(text=now_footer(category))
+    e = discord.Embed(title="Lager", color=0x2B2D31)
+    e.description = "\n".join(clean).strip()
+    e.set_footer(text=now_footer("Kategorien: Essen · Trinken · Sonstiges"))
     return e
 
 
 async def embed_boss_lager(db):
-    return await _embed_lager_category(db, "Boss Lager", "Boss Lager")
+    cur = await db.execute("SELECT item, category, qty FROM boss_inventory ORDER BY rowid")
+    rows = await cur.fetchall()
 
+    # Kategorien sind im Boss-Lager frei anlegbar. Leere Kategorien bleiben sichtbar.
+    cur = await db.execute("SELECT name FROM boss_inventory_categories ORDER BY rowid")
+    cat_rows = await cur.fetchall()
+    categories = [r["name"] for r in cat_rows if str(r["name"]).strip()]
 
-async def embed_normales_lager(db):
-    return await _embed_lager_category(db, "Normales Lager", "Normales Lager")
+    # Falls alte Daten Kategorien enthalten, die noch nicht in der Kategorietabelle stehen,
+    # werden sie trotzdem angezeigt.
+    for r in rows:
+        cat = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
+        if not any(cat.lower() == existing.lower() for existing in categories):
+            categories.append(cat)
 
+    if not categories:
+        categories = ["Sonstiges"]
 
-# Legacy alias: alte "lager"-Panel-Nachrichten zeigen nur noch das normale Lager.
-async def embed_lager(db):
-    return await embed_normales_lager(db)
+    grouped = {cat: [] for cat in categories}
+    for r in rows:
+        raw = str(r["category"] or "Sonstiges").strip() or "Sonstiges"
+        cat = next((c for c in categories if c.lower() == raw.lower()), raw)
+        grouped.setdefault(cat, []).append(r)
+
+    clean = []
+    for cat in categories:
+        items = grouped.get(cat, [])
+        clean.append(f"**{cat} ({len(items)})**")
+        if items:
+            for r in items:
+                qty = f"{int(r['qty']):,}".replace(",", ".")
+                clean.append(f"• {r['item']}  —  **{qty}**")
+        else:
+            clean.append("_leer_")
+        clean.append("")
+
+    cur = await db.execute(
+        "SELECT item, delta, who_id, created_at FROM boss_inventory_log ORDER BY id DESC LIMIT 5"
+    )
+    logs = await cur.fetchall()
+    clean.append("**Letzte Bewegung**")
+    if logs:
+        for lg in logs:
+            sign = "+" if lg["delta"] > 0 else ""
+            clean.append(f"{sign}{lg['delta']} {lg['item']} • <@{lg['who_id']}> • {lg['created_at']}")
+    else:
+        clean.append("_noch keine_")
+
+    e = discord.Embed(title="Boss Menü Lager", color=0x2B2D31)
+    e.description = "\n".join(clean).strip()
+    e.set_footer(text=now_footer("Kategorien: " + " · ".join(categories)))
+    return e
 
 
 async def embed_urlaub(guild, db):
@@ -642,16 +543,10 @@ async def embed_pflicht():
 
 
 async def embed_routes(db):
-    try:
-        cur = await db.execute("SELECT name, amount FROM routes ORDER BY id")
-        rows = await cur.fetchall()
-        lines = [f"• **{r['name']}** — {r['amount'] or '-'}" for r in rows]
-    except Exception:
-        cur = await db.execute("SELECT name FROM routes ORDER BY id")
-        rows = await cur.fetchall()
-        lines = [f"• {r['name']}" for r in rows]
+    # Das Panel dient nur noch als Steuerung. Eingetragene Routen werden
+    # nach dem Bestätigen als normale Discord-Nachricht in den Kanal gepostet.
     e = discord.Embed(title="Unsere Route", color=0x2B2D31)
-    e.description = "\n".join(lines) or "_keine Route_"
+    e.description = "_Route über **Route eintragen** posten._"
     e.set_footer(text=now_footer("Website"))
     return e
 

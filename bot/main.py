@@ -1,3 +1,4 @@
+BUILD_ID = "2026-09-09-aufstellung-v10-single-ack"
 import asyncio
 import os
 import sys
@@ -31,11 +32,30 @@ intents.guilds = True
 intents.message_content = True
 
 SETUP_PANELS = [
-    "mitarbeiter", "memberliste", "rang", "aufstellung", "dienst", "katalog",
-    "sanktionen", "ausruestung", "bosslager", "normaleslager", "urlaub", "infos", "arbeiter",
-    "tickets", "regeln", "status", "aktivitaet", "notizen", "blacklist",
-    "pflicht", "routen", "einkauf", "routecheck", "lootdrop", "rollenanfrage",
-    "rollenbestaetigen", "clipantrag", "abgaben", "kasse",
+    "aufstellung",
+    "dienst",
+    "aktivitaet",
+    "katalog",
+    "sanktionen",
+    "blacklist",
+    "rang",
+    "memberliste",
+    "mitarbeiter",
+    "pflicht",
+    "lager",
+    "bosslager",
+    "lootdrop",
+    "abgaben",
+    "kasse",
+    "routen",
+    "einkauf",
+    "routecheck",
+    "arbeiter",
+    "urlaub",
+    "rollenanfrage",
+    "rollenbestaetigen",
+    "clipantrag",
+    "tickets",
 ]
 
 PANEL_NAMES = [
@@ -47,8 +67,8 @@ PANEL_NAMES = [
     "katalog",
     "sanktionen",
     "ausruestung",
+    "lager",
     "bosslager",
-    "normaleslager",
     "urlaub",
     "infos",
     "arbeiter",
@@ -70,29 +90,31 @@ PANEL_NAMES = [
 ]
 
 
+async def _ophelia_view_on_error(self, interaction, error, item):
+    # Discord 10062/40060 sind Transport-/Doppelantwortfehler und sollen niemals
+    # als sichtbare Bot-Fehlermeldung im Channel landen.
+    code = getattr(error, "code", None)
+    if isinstance(error, discord.InteractionResponded) or code in (10062, 40060):
+        print(f"Interaction ignoriert ({code or 'already-responded'}): {error}")
+        return
+    print(f"View-Fehler bei {getattr(item, 'custom_id', None)}: {error!r}")
+
+
+# Einheitlicher Fehlerhandler für alle Views.
+discord.ui.View.on_error = _ophelia_view_on_error
+
+
 class ClubBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         self.db = None
-        self.web_button_config = {}
-        self.started_at = datetime.now(TZ) if TZ else datetime.now()
-
-    async def load_web_button_config(self):
-        self.web_button_config = {}
-        if not self.db:
-            return
-        cur = await self.db.execute("SELECT panel_key,button_key,label,style,enabled FROM web_panel_buttons")
-        for row in await cur.fetchall():
-            self.web_button_config.setdefault(row["panel_key"], {})[row["button_key"]] = dict(row)
 
     async def setup_hook(self):
         self.db = await database.connect()
-        await self.load_web_button_config()
         self.add_view(views.DienstView(self))
         self.add_view(views.AufstellungView(self))
-        self.add_view(views.BossLagerView(self))
-        self.add_view(views.NormalesLagerView(self))
         self.add_view(views.LagerView(self))
+        self.add_view(views.BossLagerView(self))
         self.add_view(views.SanktionView(self))
         self.add_view(views.AusruestungView(self))
         self.add_view(views.UrlaubView(self))
@@ -143,37 +165,96 @@ class ClubBot(commands.Bot):
         except discord.HTTPException:
             pass
 
-    async def _panel_override(self, key: str, embed):
-        """Apply optional web-studio design overrides while preserving the panel function/data."""
-        try:
-            cur = await self.db.execute(
-                "SELECT title_override, description_override, color_hex, footer_text, image_url, thumbnail_url FROM web_builder_panels WHERE panel_key=?",
-                (key,),
-            )
-            row = await cur.fetchone()
-            if row:
-                if row["title_override"].strip():
-                    embed.title = row["title_override"].strip()
-                if row["description_override"].strip():
-                    embed.description = row["description_override"].strip()
-                color_text = (row["color_hex"] or "").strip().lstrip("#")
-                if color_text and color_text.upper() != "5865F2":
-                    try:
-                        embed.color = discord.Color(int(color_text, 16))
-                    except ValueError:
-                        pass
-                if (row["footer_text"] or "").strip():
-                    embed.set_footer(text=row["footer_text"].strip())
-                if (row["image_url"] or "").strip():
-                    embed.set_image(url=row["image_url"].strip())
-                if (row["thumbnail_url"] or "").strip():
-                    embed.set_thumbnail(url=row["thumbnail_url"].strip())
-        except Exception:
-            pass
-        return embed
+    async def refresh_panels(self, guild: discord.Guild, names=None):
+        # Builder werden absichtlich lazy erzeugt. In älteren Versionen wurden hier
+        # für *alle* Panels Coroutine-Objekte erstellt, obwohl nur ein Panel
+        # aktualisiert wurde. Das erzeugte unawaited-coroutine Warnungen und machte
+        # Panel-Updates unnötig instabil.
+        mapping = {
+            "mitarbeiter": ("mitarbeiter", lambda: panels.embed_mitarbeiter(guild), lambda: None),
+            "memberliste": ("memberliste", lambda: panels.embed_memberliste(guild), lambda: None),
+            "rang": ("rang", lambda: panels.embed_rangsystem(guild), lambda: None),
+            "aufstellung": ("aufstellung", lambda: panels.embed_aufstellung(guild, self.db), lambda: views.DienstView(self)),
+            "dienst": ("dienst", lambda: panels.embed_abmeldung(guild, self.db), lambda: views.AbmeldungView(self)),
+            "katalog": ("katalog", lambda: panels.embed_katalog(self.db), lambda: None),
+            "sanktionen": ("sanktionen", lambda: panels.embed_sanktionen(guild, self.db), lambda: views.SanktionView(self)),
+            "ausruestung": ("ausruestung", lambda: panels.embed_ausruestung(guild, self.db), lambda: views.AusruestungView(self)),
+            "lager": ("lager", lambda: panels.embed_lager(self.db), lambda: views.LagerView(self)),
+            "bosslager": ("bosslager", lambda: panels.embed_boss_lager(self.db), lambda: views.BossLagerView(self)),
+            "urlaub": ("urlaub", lambda: panels.embed_urlaub(guild, self.db), lambda: views.UrlaubView(self)),
+            "infos": ("infos", lambda: panels.embed_infos(self.db), lambda: None),
+            "arbeiter": ("arbeiter", lambda: panels.embed_arbeiter(guild, self.db), lambda: views.ArbeiterView(self)),
+            "tickets": ("tickets", lambda: panels.embed_tickets(), lambda: views.TicketView(self)),
+            "regeln": ("regeln", lambda: panels.embed_regeln(self.db), lambda: None),
+            "status": ("status", lambda: panels.embed_status(self.db), lambda: views.StatusView(self)),
+            "aktivitaet": ("aktivitaet", lambda: panels.embed_aktivitaet(guild, self.db), lambda: views.AktivitaetView(self)),
+            "notizen": ("notizen", lambda: panels.embed_notizen(self.db), lambda: None),
+            "blacklist": ("blacklist", lambda: panels.embed_blacklist(self.db), lambda: views.BlacklistView(self)),
+            "pflicht": ("pflicht", lambda: panels.embed_pflicht(), lambda: None),
+            "routen": ("routen", lambda: panels.embed_routes(self.db), lambda: views.RouteView(self)),
+            "einkauf": ("einkauf", lambda: panels.embed_einkauf(self.db), lambda: views.EinkaufView(self)),
+            "routecheck": ("routecheck", lambda: panels.embed_routecheck(self.db), lambda: views.RouteCheckView(self)),
+            "lootdrop": ("lootdrop", lambda: panels.embed_lootdrop(self.db), lambda: views.LootView(self)),
+            "rollenanfrage": ("rollenanfrage", lambda: panels.embed_rollenanfrage(), lambda: views.RolleAnfrageView(self)),
+            "rollenbestaetigen": ("rollenbestaetigen", lambda: panels.embed_rollenbestaetigen(), lambda: None),
+            "clipantrag": ("clipantrag", lambda: panels.embed_clipantrag(), lambda: views.ClipAntragView(self)),
+            "abgaben": ("abgaben", lambda: panels.embed_abgaben(self.db), lambda: views.AbgabeView(self)),
+            "kasse": ("kasse", lambda: panels.embed_kasse(self.db), lambda: views.KasseView(self)),
+        }
+        targets = names or list(mapping.keys())
+        updated = 0
+        for name in targets:
+            if name == "aktivitaet" or name not in mapping:
+                continue
+            key, embed_factory, view_factory = mapping[name]
+            row = await database.get_panel(self.db, f"{guild.id}:{key}")
+            if not row:
+                continue
+            ch = guild.get_channel(row["channel_id"])
+            if not ch:
+                continue
+            try:
+                msg = await ch.fetch_message(row["message_id"])
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                continue
+            view = view_factory()
+            if name == "routen":
+                try:
+                    await msg.edit(content="# Unsere Route", embed=None, view=view)
+                    updated += 1
+                except discord.HTTPException:
+                    pass
+                continue
+            try:
+                embed = await embed_factory()
+                await msg.edit(embed=embed, view=view)
+                updated += 1
+            except discord.HTTPException:
+                pass
+        return updated
 
-    def _panel_builder(self, guild: discord.Guild, key: str):
-        # Lazy factories are important here: they prevent unused coroutine warnings.
+    async def post_panel(self, channel: discord.TextChannel, key: str):
+        guild = channel.guild
+
+        # Legacy-/Cache-Schutz: Discord kann nach alten Deploys noch frühere
+        # Choice-Werte wie "Custom-Panel" senden. Hier wird deshalb direkt
+        # an der zentralen Panel-Funktion normalisiert, damit selbst alte
+        # Slash-Command-Payloads nicht mehr in einen "nicht gefunden"-Fehler laufen.
+        raw_key = str(key or "").strip()
+        normalized_key = raw_key.lower().replace("_", "-").replace(" ", "-")
+        legacy_aliases = {
+            "custom-panel": "bosslager",
+            "custompanel": "bosslager",
+            "boss-menü-lager": "bosslager",
+            "boss-menu-lager": "bosslager",
+            "boss-menue-lager": "bosslager",
+            "boss-manager": "bosslager",
+            "bossmanager": "bosslager",
+            "unsere-route": "routen",
+            "route": "routen",
+        }
+        key = legacy_aliases.get(normalized_key, normalized_key.replace("-", ""))
+
         builders = {
             "mitarbeiter": (lambda: panels.embed_mitarbeiter(guild), lambda: None),
             "memberliste": (lambda: panels.embed_memberliste(guild), lambda: None),
@@ -183,9 +264,8 @@ class ClubBot(commands.Bot):
             "katalog": (lambda: panels.embed_katalog(self.db), lambda: None),
             "sanktionen": (lambda: panels.embed_sanktionen(guild, self.db), lambda: views.SanktionView(self)),
             "ausruestung": (lambda: panels.embed_ausruestung(guild, self.db), lambda: views.AusruestungView(self)),
+            "lager": (lambda: panels.embed_lager(self.db), lambda: views.LagerView(self)),
             "bosslager": (lambda: panels.embed_boss_lager(self.db), lambda: views.BossLagerView(self)),
-            "normaleslager": (lambda: panels.embed_normales_lager(self.db), lambda: views.NormalesLagerView(self)),
-            "lager": (lambda: panels.embed_normales_lager(self.db), lambda: views.LagerView(self)),
             "urlaub": (lambda: panels.embed_urlaub(guild, self.db), lambda: views.UrlaubView(self)),
             "infos": (lambda: panels.embed_infos(self.db), lambda: None),
             "arbeiter": (lambda: panels.embed_arbeiter(guild, self.db), lambda: views.ArbeiterView(self)),
@@ -206,75 +286,10 @@ class ClubBot(commands.Bot):
             "abgaben": (lambda: panels.embed_abgaben(self.db), lambda: views.AbgabeView(self)),
             "kasse": (lambda: panels.embed_kasse(self.db), lambda: views.KasseView(self)),
         }
-        entry = builders.get(key)
-        if not entry:
-            return None
-        embed_factory, view_factory = entry
-        return embed_factory, (lambda: self._apply_view_overrides(key, view_factory()))
-
-    def _apply_view_overrides(self, panel_key: str, view):
-        """Apply generic web-configured labels/styles/enabled state to Discord buttons."""
-        if view is None:
-            return None
-        cfg = self.web_button_config.get(panel_key, {})
-        style_map = {
-            "primary": discord.ButtonStyle.primary,
-            "secondary": discord.ButtonStyle.secondary,
-            "success": discord.ButtonStyle.success,
-            "danger": discord.ButtonStyle.danger,
-        }
-        for item in getattr(view, "children", []):
-            custom_id = getattr(item, "custom_id", None)
-            if not custom_id:
-                continue
-            row = cfg.get(custom_id)
-            if not row:
-                continue
-            if hasattr(item, "label") and row.get("label"):
-                item.label = row["label"]
-            if hasattr(item, "style") and row.get("style") in style_map:
-                item.style = style_map[row["style"]]
-            item.disabled = not bool(row.get("enabled", 1))
-        return view
-
-    async def refresh_panels(self, guild: discord.Guild, names=None):
-        targets = names or [
-            "mitarbeiter", "memberliste", "rang", "aufstellung", "dienst", "katalog",
-            "sanktionen", "ausruestung", "bosslager", "normaleslager", "urlaub", "infos", "arbeiter",
-            "tickets", "regeln", "status", "aktivitaet", "notizen", "blacklist",
-            "pflicht", "routen", "einkauf", "routecheck", "lootdrop", "rollenanfrage",
-            "rollenbestaetigen", "clipantrag", "abgaben", "kasse"
-        ]
-        for key in targets:
-            if key == "aktivitaet":
-                continue
-            factory = self._panel_builder(guild, key)
-            if not factory:
-                continue
-            row = await database.get_panel(self.db, f"{guild.id}:{key}")
-            if not row:
-                continue
-            ch = guild.get_channel(row["channel_id"])
-            if not ch:
-                continue
-            try:
-                msg = await ch.fetch_message(row["message_id"])
-            except discord.NotFound:
-                continue
-            embed = await factory[0]()
-            embed = await self._panel_override(key, embed)
-            view = factory[1]()
-            try:
-                await msg.edit(embed=embed, view=view)
-            except discord.HTTPException:
-                pass
-
-    async def post_panel(self, channel: discord.TextChannel, key: str):
-        guild = channel.guild
-        factory = self._panel_builder(guild, key)
-        if not factory:
-            raise ValueError(f"Unbekanntes Panel: {key}")
-        view = factory[1]()
+        if key not in builders:
+            raise KeyError(f"Unbekanntes Panel: {key}")
+        embed_factory, view_factory = builders[key]
+        view = view_factory()
         if key == "aktivitaet":
             ping = panels.ping_ophelia(guild)
             img = Path(__file__).resolve().parent.parent / "assets" / "aktivitaet.png"
@@ -282,82 +297,36 @@ class ClubBot(commands.Bot):
             if img.exists():
                 kwargs["file"] = discord.File(img, filename="aktivitaet.png")
             msg = await channel.send(**kwargs)
+        elif key == "routen":
+            msg = await channel.send(content="# Unsere Route", view=view)
         else:
-            embed = await factory[0]()
-            embed = await self._panel_override(key, embed)
+            embed = await embed_factory()
             heading = embed.title or key
             msg = await channel.send(content=f"# {heading}", embed=embed, view=view)
         await database.set_panel(self.db, f"{guild.id}:{key}", channel.id, msg.id)
         return msg
 
-    async def post_custom_panel(self, channel: discord.TextChannel, panel_key: str):
-        cur = await self.db.execute(
-            "SELECT * FROM web_builder_panels WHERE panel_key=? AND source='custom'",
-            (panel_key,),
-        )
-        row = await cur.fetchone()
-        if not row:
-            raise ValueError("Custom-Panel nicht gefunden")
-        color_text = (row["color_hex"] or "#5865F2").lstrip("#")
-        try:
-            color = int(color_text, 16)
-        except ValueError:
-            color = 0x5865F2
-
-        kwargs = {}
-        message_type = row["message_type"] or "embed"
-        if row["content_text"]:
-            kwargs["content"] = row["content_text"]
-        if message_type != "plain":
-            embed = discord.Embed(
-                title=row["title_override"] or row["label"],
-                description=row["description_override"] or None,
-                color=color,
-            )
-            if row["footer_text"]:
-                embed.set_footer(text=row["footer_text"])
-            if row["image_url"]:
-                embed.set_image(url=row["image_url"])
-            if row["thumbnail_url"]:
-                embed.set_thumbnail(url=row["thumbnail_url"])
-            curf = await self.db.execute("SELECT * FROM web_setup_fields WHERE panel_key=? ORDER BY sort_order,id", (panel_key,))
-            for f in await curf.fetchall():
-                embed.add_field(name=f["name"][:256], value=(f["value"] or "-")[:1024], inline=bool(f["inline"]))
-            kwargs["embed"] = embed
-
-        image_path = (row["image_path"] or "").strip()
-        if image_path:
-            full = Path(__file__).resolve().parent.parent / image_path
-            if full.exists():
-                kwargs["file"] = discord.File(full, filename=full.name)
-
-        # Custom URL buttons are supported immediately. Bot-action buttons remain dedicated to built-in modules.
-        cura = await self.db.execute("SELECT * FROM web_setup_actions WHERE panel_key=? AND enabled=1 ORDER BY sort_order,id", (panel_key,))
-        actions = await cura.fetchall()
-        url_actions = [a for a in actions if a["action_type"] == "url" and a["action_value"]]
-        if url_actions:
-            view = discord.ui.View(timeout=None)
-            for a in url_actions[:25]:
-                view.add_item(discord.ui.Button(label=a["label"][:80], url=a["action_value"]))
-            kwargs["view"] = view
-
-        msg = await channel.send(**kwargs)
-        await database.set_panel(self.db, f"{channel.guild.id}:{panel_key}", channel.id, msg.id)
-        return msg
-
     async def repost_panel(self, guild, key):
         row = await database.get_panel(self.db, f"{guild.id}:{key}")
         if not row:
-            return
+            return None
         ch = guild.get_channel(row["channel_id"])
         if not ch:
-            return
+            return None
+        old = None
         try:
             old = await ch.fetch_message(row["message_id"])
-            await old.delete()
         except discord.HTTPException:
-            pass
-        await self.post_panel(ch, key)
+            old = None
+        # Erst neue Nachricht posten und DB-Zeiger aktualisieren. So bleibt bei einem
+        # Discord-Fehler nicht plötzlich gar kein Panel mehr übrig.
+        msg = await self.post_panel(ch, key)
+        if old and old.id != msg.id:
+            try:
+                await old.delete()
+            except discord.HTTPException:
+                pass
+        return msg
 
 
 bot = ClubBot()
@@ -369,6 +338,23 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.watching, name="Ophelia Manager")
     )
     print(f"Ophelia Manager online als {bot.user} ({bot.user.id})")
+    print(f"Build: {BUILD_ID}")
+
+    # Slash-Commands pro Server synchronisieren, damit Discord die festen
+    # /setup-Panel-Optionen sofort und zuverlässig aktualisiert.
+    # Die eigentlichen Commands/Funktionen bleiben unverändert.
+    for g in bot.guilds:
+        try:
+            # Alte/stale Server-Commands (z. B. ein früheres „Custom-Panel“)
+            # zuerst vollständig aus dem lokalen Tree entfernen und danach
+            # die aktuellen globalen Commands frisch pro Server registrieren.
+            bot.tree.clear_commands(guild=g)
+            bot.tree.copy_global_to(guild=g)
+            synced = await bot.tree.sync(guild=g)
+            print(f"Command-Sync für {g.name}: {len(synced)} Commands")
+        except Exception as exc:
+            print(f"Command-Sync für {g.name} fehlgeschlagen:", exc)
+
     for g in bot.guilds:
         raw = await database.get_setting(bot.db, f"ranks:{g.id}")
         lead = await database.get_setting(bot.db, f"leaders:{g.id}")
@@ -406,45 +392,6 @@ async def daily_clock():
     if last == mark:
         return
     await database.set_setting(bot.db, "clock_tick", mark)
-    # Configurable automatic Aufstellung posting from the web panel.
-    for g in bot.guilds:
-        send_time = await database.get_setting(bot.db, f"aufstellung_send_time:{g.id}", "")
-        send_days = await database.get_setting(bot.db, f"aufstellung_send_days:{g.id}", "")
-        if send_time and send_days and now.strftime("%H:%M") == send_time and str(now.weekday()) in send_days.split(","):
-            tick_key = f"aufstellung_auto_last:{g.id}"
-            today_mark = now.strftime("%Y-%m-%d-%H:%M")
-            if await database.get_setting(bot.db, tick_key, "") != today_mark:
-                if await database.get_setting(bot.db, f"aufstellung_reset_on_send:{g.id}", "0") == "1":
-                    await bot.db.execute("DELETE FROM attendance")
-                    await bot.db.commit()
-                try:
-                    await bot.repost_panel(g, "aufstellung")
-                    await bot.log(g, f"Aufstellung automatisch um {send_time} gesendet.", "Aufstellung")
-                except Exception as exc:
-                    print("Automatic Aufstellung post failed:", g.id, repr(exc))
-                await database.set_setting(bot.db, tick_key, today_mark)
-
-    # V4 Universal Studio schedules for custom /setup panels.
-    cur = await bot.db.execute("SELECT * FROM web_builder_panels WHERE source='custom' AND auto_send=1")
-    for row in await cur.fetchall():
-        send_time = row["schedule_time"] or ""
-        days = (row["schedule_days"] or "").split(",")
-        channel_id = row["schedule_channel_id"]
-        if not send_time or not channel_id or now.strftime("%H:%M") != send_time or str(now.weekday()) not in days:
-            continue
-        tick_key = f"custom_auto_last:{row['panel_key']}"
-        stamp = now.strftime("%Y-%m-%d-%H-%M")
-        if await database.get_setting(bot.db, tick_key, "") == stamp:
-            continue
-        for g in bot.guilds:
-            ch = g.get_channel(int(channel_id))
-            if ch:
-                try:
-                    await bot.post_custom_panel(ch, row["panel_key"])
-                except Exception as exc:
-                    print("Custom setup auto-send failed:", row["panel_key"], repr(exc))
-        await database.set_setting(bot.db, tick_key, stamp)
-
     if now.hour == 0 and now.minute == 0:
         for g in bot.guilds:
             await bot.db.execute("DELETE FROM attendance")
@@ -467,48 +414,23 @@ async def daily_clock():
                 await bot.repost_panel(g, "aktivitaet")
             await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
-        # 18:00-Prüfung:
-        # Wer weiterhin "offen" ist, hat weder Anmelden noch Abmelden gewählt
-        # und bekommt einmal pro Tag automatisch eine 15k-Sanktion.
         from panels import staff_members
         for g in bot.guilds:
-            today = now.strftime("%Y-%m-%d")
-            sanction_tick = f"attendance_18_sanction_last:{g.id}"
-            if await database.get_setting(bot.db, sanction_tick, "") == today:
-                continue
-
             cur = await bot.db.execute("SELECT user_id, status FROM attendance")
             rows = {r["user_id"]: r["status"] for r in await cur.fetchall()}
             cur = await bot.db.execute(
                 "SELECT user_id FROM vacations WHERE status IN ('genehmigt', 'aktiv')"
             )
             vac = {r["user_id"] for r in await cur.fetchall()}
-
             hit = []
-            sanction_ids = {}
             for m in staff_members(g):
                 if m.id in vac:
                     continue
                 st = rows.get(m.id, "offen")
                 if st in {"angemeldet", "abgemeldet"}:
                     continue
-
-                # Zusätzlicher Schutz gegen doppelte Sanktionen nach einem Neustart.
-                day_prefix = now.strftime("%d.%m.%Y")
-                cur = await bot.db.execute(
-                    """
-                    SELECT id FROM sanctions
-                    WHERE user_id = ? AND kind = ? AND created_at LIKE ?
-                    ORDER BY id DESC LIMIT 1
-                    """,
-                    (m.id, "Nicht an-/abgemeldet (offen nach 18 Uhr)", f"{day_prefix}%"),
-                )
-                existing = await cur.fetchone()
-                if existing:
-                    sanction_ids[m.id] = existing["id"]
-                    continue
-
-                cur = await bot.db.execute(
+                hit.append(m)
+                await bot.db.execute(
                     """
                     INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
                     VALUES(?, ?, ?, ?, ?, 1, ?)
@@ -522,13 +444,7 @@ async def daily_clock():
                         now.strftime("%d.%m.%Y %H:%M"),
                     ),
                 )
-                sanction_ids[m.id] = cur.lastrowid
-                hit.append(m)
-
             await bot.db.commit()
-            # Markieren, dass dieser Server für heute geprüft wurde.
-            await database.set_setting(bot.db, sanction_tick, today)
-
             if hit:
                 await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
                 await bot.log(
@@ -547,7 +463,12 @@ async def daily_clock():
                 )
                 if sch:
                     for m in hit:
-                        sid = sanction_ids.get(m.id, "?")
+                        cur = await bot.db.execute(
+                            "SELECT id FROM sanctions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+                            (m.id,),
+                        )
+                        row = await cur.fetchone()
+                        sid = row["id"] if row else "?"
                         e = discord.Embed(title="Sanktion", color=0xC0392B)
                         e.description = (
                             f"**Wer:** {m.mention}\n"
@@ -631,46 +552,99 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         )
 
 
-async def _setup_autocomplete(interaction: discord.Interaction, current: str):
-    names = list(SETUP_PANELS)
-    if bot.db:
-        cur = await bot.db.execute("SELECT panel_key FROM web_builder_panels WHERE source='custom' AND enabled=1 ORDER BY sort_order,id")
-        names.extend(r["panel_key"] for r in await cur.fetchall())
-    needle = (current or "").lower()
-    return [app_commands.Choice(name=n[:100], value=n) for n in names if needle in n.lower()][:25]
+async def setup_panel_autocomplete(interaction: discord.Interaction, current: str):
+    current = (current or "").lower().strip()
+    return [
+        app_commands.Choice(name=name, value=name)
+        for name in SETUP_PANELS
+        if current in name.lower()
+    ][:25]
 
-@bot.tree.command(name="setup", description="Ein Bot- oder eigenes Studio-Panel in diesen Kanal setzen")
-@app_commands.describe(panel="Welches Panel soll hier stehen?")
-@app_commands.autocomplete(panel=_setup_autocomplete)
+
+@bot.tree.command(name="setup", description="Eine Live-Liste in diesen Kanal setzen")
+@app_commands.describe(panel="Welche Liste soll hier stehen?")
+@app_commands.autocomplete(panel=setup_panel_autocomplete)
 async def setup_cmd(interaction: discord.Interaction, panel: str):
     if not is_leader(interaction.user):
+        if interaction.response.is_done():
+            return await interaction.followup.send("Nur Leitung.", ephemeral=True)
         return await interaction.response.send_message("Nur Leitung.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+
+    # Discord kann nach alten Deploys noch einen veralteten Choice-Wert senden.
+    # Deshalb niemals direkt mit dem Payload in post_panel gehen.
+    raw = str(panel or "").strip()
+    normalized = raw.lower().replace("_", "-").replace(" ", "-")
+    aliases = {
+        "custom-panel": "bosslager",
+        "custompanel": "bosslager",
+        "boss-menü-lager": "bosslager",
+        "boss-menu-lager": "bosslager",
+        "bosslager": "bosslager",
+        "boss-menue-lager": "bosslager",
+        "boss-manager": "bosslager",
+        "bossmanager": "bosslager",
+        "unsere-route": "routen",
+        "route": "routen",
+    }
+    key = aliases.get(normalized, normalized.replace("-", ""))
+
+    # Exakte aktuelle Werte bevorzugen.
+    if raw.lower() in SETUP_PANELS:
+        key = raw.lower()
+    elif normalized in SETUP_PANELS:
+        key = normalized
+
+    if key not in SETUP_PANELS:
+        text = ", ".join(f"`{x}`" for x in SETUP_PANELS)
+        msg = (
+            f"Die alte Panel-Option **{raw or 'unbekannt'}** ist nicht mehr gültig. "
+            f"Öffne `/setup` bitte neu und wähle eines der aktuellen Panels:\n{text}"
+        )
+        if interaction.response.is_done():
+            return await interaction.followup.send(msg, ephemeral=True)
+        return await interaction.response.send_message(msg, ephemeral=True)
+
     try:
-        if panel in SETUP_PANELS or bot._panel_builder(interaction.guild, panel):
-            await bot.post_panel(interaction.channel, panel)
-        else:
-            await bot.post_custom_panel(interaction.channel, panel)
-    except Exception as exc:
-        return await interaction.followup.send(f"Panel konnte nicht gepostet werden: {exc}", ephemeral=True)
-    await interaction.followup.send(
-        f"Ophelia Manager hat **{panel}** hier gepostet.",
-        ephemeral=True,
-    )
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        await bot.post_panel(interaction.channel, key)
+        await interaction.followup.send(
+            f"Ophelia Manager hat **{key}** hier gepostet. Die Liste bleibt aktuell.",
+            ephemeral=True,
+        )
+    except (discord.NotFound, discord.InteractionResponded):
+        # Das Panel selbst wurde ggf. bereits gepostet; alte/abgelaufene Interaction
+        # soll nicht als sichtbarer Fehler im Discord landen.
+        return
+    except KeyError:
+        # Zusätzliche Absicherung gegen alte Slash-Command-Payloads.
+        await interaction.followup.send(
+            "Diese alte Panel-Auswahl existiert nicht mehr. Bitte `/setup` neu öffnen.",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(name="version", description="Zeigt die aktuell laufende Bot-Version")
+async def version_cmd(interaction: discord.Interaction):
+    msg = f"Ophelia Manager Build: `{BUILD_ID}`"
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 @bot.tree.command(name="anmelden", description="Bei der Aufstellung anmelden")
 async def cmd_anmelden(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    acknowledged = await views.safe_defer(interaction)
     await views.set_dienst(bot, interaction.user, "angemeldet")
-    await interaction.followup.send("Angemeldet.", ephemeral=True)
+    await views.safe_feedback(interaction, "Angemeldet.", acknowledged)
 
 
 @bot.tree.command(name="abmelden", description="Bei der Aufstellung abmelden")
 async def cmd_abmelden(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
+    acknowledged = await views.safe_defer(interaction)
     await views.set_dienst(bot, interaction.user, "abgemeldet")
-    await interaction.followup.send("Abgemeldet.", ephemeral=True)
+    await views.safe_feedback(interaction, "Abgemeldet.", acknowledged)
 
 
 @bot.tree.command(name="logkanal", description="Log-Kanal festlegen")

@@ -12,27 +12,64 @@ def stamp():
 LEAD_MSG = "Nur Leadership kann das ausführen."
 
 
-async def configured_button_role_gate(interaction, bot, button_key: str):
-    """Return None when no web role rule exists, True when allowed, False when blocked."""
-    db = getattr(bot, "db", None)
-    if not db:
-        return None
-    try:
-        cur = await db.execute("SELECT role_id FROM web_button_roles WHERE button_key=?", (button_key,))
-        rows = await cur.fetchall()
-    except Exception:
-        return None
-    if not rows:
-        return None
-    allowed = {int(r["role_id"]) for r in rows}
-    user_roles = {r.id for r in getattr(interaction.user, "roles", [])}
-    if allowed & user_roles:
+async def finish_ephemeral(interaction: discord.Interaction, text: str):
+    """Sendet sicher eine private Antwort, egal ob die Interaction schon deferred wurde."""
+    if interaction.response.is_done():
+        return await interaction.followup.send(text, ephemeral=True)
+    return await interaction.response.send_message(text, ephemeral=True)
+
+
+def _interaction_is_stale_or_done(exc: Exception) -> bool:
+    # 10062 = Unknown interaction (Token abgelaufen / falsche Instanz)
+    # 40060 = Interaction already acknowledged (z. B. zweite Bot-Instanz oder Doppelantwort)
+    return isinstance(exc, discord.InteractionResponded) or getattr(exc, "code", None) in (10062, 40060)
+
+
+async def safe_defer(interaction: discord.Interaction) -> bool:
+    """Bestätigt eine Interaction genau einmal und verschluckt 10062/40060 sauber."""
+    if interaction.response.is_done():
         return True
     try:
-        await interaction.response.send_message("Keine Rechte für diesen Button.", ephemeral=True)
-    except Exception:
-        pass
-    return False
+        await interaction.response.defer(ephemeral=True)
+        return True
+    except (discord.InteractionResponded, discord.HTTPException) as exc:
+        if _interaction_is_stale_or_done(exc):
+            # 40060 bedeutet: Discord hat bereits eine Antwort. Die Aktion darf weiterlaufen.
+            # 10062 bedeutet: Diese Interaction kann nicht mehr beantwortet werden.
+            return getattr(exc, "code", None) == 40060 or isinstance(exc, discord.InteractionResponded)
+        raise
+
+
+async def safe_feedback(interaction: discord.Interaction, text: str, acknowledged: bool = True):
+    """Private Rückmeldung ohne sichtbare 10062/40060-Fehlermeldungen."""
+    if not acknowledged:
+        return None
+    try:
+        return await finish_ephemeral(interaction, text)
+    except (discord.InteractionResponded, discord.HTTPException) as exc:
+        if _interaction_is_stale_or_done(exc):
+            return None
+        raise
+
+
+async def refresh_boss_message(bot, guild, source_message=None):
+    """Aktualisiert bevorzugt genau das Boss-Lager, auf dem geklickt wurde."""
+    from panels import embed_boss_lager
+    if source_message is not None:
+        try:
+            embed = await embed_boss_lager(bot.db)
+            await source_message.edit(embed=embed, view=BossLagerView(bot))
+            return True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+    updated = await bot.refresh_panels(guild, ["bosslager"])
+    if not updated:
+        try:
+            await bot.repost_panel(guild, "bosslager")
+            return True
+        except Exception:
+            return False
+    return True
 
 
 def ping_leaderschaft(guild):
@@ -92,6 +129,7 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
         self.person = person
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         text = f"{self.person.mention} | {self.von} – {self.bis} | {self.grund}"
         await self.bot.db.execute(
             """
@@ -104,7 +142,7 @@ class AbmeldenModal(discord.ui.Modal, title="Abmelden"):
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
         await self.bot.log(interaction.guild, text, "Abmeldung")
-        await interaction.response.send_message(f"{self.person.mention} ist abgemeldet.", ephemeral=True)
+        await finish_ephemeral(interaction, f"{self.person.mention} ist abgemeldet.")
 
 
 class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
@@ -120,6 +158,7 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not can_sanction(interaction.user):
             return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         uid = self.person.id
         await self.bot.db.execute(
             """
@@ -146,7 +185,7 @@ class SanktionModal(discord.ui.Modal, title="Sanktion eintragen"):
             f"{interaction.user.mention} hat Sanktion gegen {self.person.mention}: {self.was} – {self.wieviel}",
             "Sanktionen",
         )
-        await interaction.response.send_message(f"Sanktion für {self.person.mention} gepostet.", ephemeral=True)
+        await finish_ephemeral(interaction, f"Sanktion für {self.person.mention} gepostet.")
 
 
 class SanktionPayView(discord.ui.View):
@@ -155,9 +194,6 @@ class SanktionPayView(discord.ui.View):
 
     @discord.ui.button(label="Bezahlt", style=discord.ButtonStyle.success, custom_id="san:paymsg")
     async def pay(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "san:paymsg")
-        if __web_gate is False:
-            return
         if not can_sanction(interaction.user):
             return await interaction.response.send_message("Keine Rechte. Nur Rang 12–8 und NRW.", ephemeral=True)
         sid = None
@@ -189,6 +225,7 @@ class WarnModal(discord.ui.Modal, title="Verwarnung"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO warnings(user_id, reason, by_id, created_at) VALUES(?, ?, ?, ?)",
             (self.person.id, str(self.grund), interaction.user.id, stamp()),
@@ -199,42 +236,51 @@ class WarnModal(discord.ui.Modal, title="Verwarnung"):
             interaction.guild,
             f"{interaction.user.mention} hat {self.person.mention} verwarnt: {self.grund}",
         )
-        await interaction.response.send_message(f"Verwarnung für {self.person.mention}.", ephemeral=True)
+        await finish_ephemeral(interaction, f"Verwarnung für {self.person.mention}.")
 
 
 class LagerModal(discord.ui.Modal):
     item = discord.ui.TextInput(label="Was (genau wie im Lager)", required=True, max_length=80)
     menge = discord.ui.TextInput(label="Wie viel (Zahl)", required=True, max_length=8)
-    wer = discord.ui.TextInput(label="Wer (leer = du)", required=False, max_length=40)
+    wer = discord.ui.TextInput(
+        label="Wer (leer = du)",
+        required=False,
+        max_length=40,
+    )
 
-    def __init__(self, bot, direction: int, category: str, panel_key: str):
+    def __init__(self, bot, direction: int):
         title = "Reinlegen" if direction > 0 else "Rausnehmen"
-        super().__init__(title=f"{title} – {category}")
+        super().__init__(title=title)
         self.bot = bot
         self.direction = direction
-        self.category = category
-        self.panel_key = panel_key
 
     async def on_submit(self, interaction: discord.Interaction):
+        if interaction.user.bot:
+            return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         try:
-            qty = int(str(self.menge).strip())
+            qty = int(str(self.menge.value).strip())
             if qty <= 0:
                 raise ValueError
         except ValueError:
-            return await interaction.response.send_message("Menge muss eine positive Zahl sein.", ephemeral=True)
+            return await interaction.response.send_message("Menge muss eine Zahl größer 0 sein.", ephemeral=True)
 
-        item_in = str(self.item).strip()
-        cur = await self.bot.db.execute(
-            "SELECT item, qty FROM inventory WHERE lower(item)=lower(?) AND category=?",
-            (item_in, self.category),
-        )
+        item_in = str(self.item.value).strip()
+        who = interaction.user.id
+        if str(self.wer.value).strip():
+            text = str(self.wer.value).strip().lstrip("@")
+            found = discord.utils.find(
+                lambda m: m.name.lower() == text.lower() or m.display_name.lower() == text.lower(),
+                interaction.guild.members,
+            )
+            who = found.id if found else interaction.user.id
+
+        cur = await self.bot.db.execute("SELECT item, qty FROM inventory WHERE lower(item) = lower(?)", (item_in,))
         row = await cur.fetchone()
         if not row:
             return await interaction.response.send_message(
-                f"`{item_in}` gibt es nicht im **{self.category}**.",
+                f"`{item_in}` gibt es nicht im Lager. Zuerst mit **Gegenstand anlegen** anlegen.",
                 ephemeral=True,
             )
-
         item = row["item"]
         new_qty = row["qty"] + (qty * self.direction)
         if new_qty < 0:
@@ -242,181 +288,283 @@ class LagerModal(discord.ui.Modal):
                 f"Nicht genug Bestand. Aktuell: {row['qty']}.",
                 ephemeral=True,
             )
-
-        who = interaction.user.id
-        await self.bot.db.execute(
-            "UPDATE inventory SET qty=? WHERE item=? AND category=?",
-            (new_qty, item, self.category),
-        )
+        await interaction.response.defer(ephemeral=True)
+        await self.bot.db.execute("UPDATE inventory SET qty = ? WHERE item = ?", (new_qty, item))
         await self.bot.db.execute(
             "INSERT INTO inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
             (item, qty * self.direction, who, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, [self.panel_key])
-
+        await self.bot.refresh_panels(interaction.guild, ["lager"])
         verb = "reingelegt" if self.direction > 0 else "rausgenommen"
-        line = f"{interaction.user.mention}: {qty}× {item} im {self.category} {verb}. Neu: {new_qty}"
-        await self.bot.log(interaction.guild, line, self.category)
-        logch = discord.utils.find(
-            lambda c: "lager-log" in c.name.lower() or c.name.lower() == "lager-logs",
-            interaction.guild.text_channels,
-        )
+        line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
+        await self.bot.log(interaction.guild, line, "Lager")
+        logch = discord.utils.find(lambda c: "lager-log" in c.name.lower() or c.name.lower() == "lager-logs", interaction.guild.text_channels)
         if logch:
             try:
                 await logch.send(line)
             except discord.HTTPException:
                 pass
-        await interaction.response.send_message(
-            f"**{qty}× {item}** {verb}. Neuer Bestand im **{self.category}**: **{new_qty}**.",
-            ephemeral=True,
-        )
+        await finish_ephemeral(interaction, f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.")
 
 
-class LagerNeuModal(discord.ui.Modal):
+class LagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
     item = discord.ui.TextInput(label="Name", required=True, max_length=80)
+    kategorie = discord.ui.TextInput(
+        label="Kategorie (Essen / Trinken / Sonstiges)",
+        required=True,
+        max_length=40,
+        default="Sonstiges",
+    )
     menge = discord.ui.TextInput(label="Startbestand", required=True, max_length=8, default="0")
 
-    def __init__(self, bot, category: str, panel_key: str):
-        super().__init__(title=f"Gegenstand – {category}")
+    def __init__(self, bot):
+        super().__init__()
         self.bot = bot
-        self.category = category
-        self.panel_key = panel_key
 
     async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
         try:
-            qty = int(str(self.menge).strip())
+            qty = int(str(self.menge.value).strip())
+        except ValueError:
+            return await safe_feedback(interaction, "Startbestand muss eine Zahl sein.", acknowledged)
+        from panels import _norm_kat
+        name = str(self.item).strip()
+        kat = _norm_kat(str(self.kategorie))
+        await self.bot.db.execute(
+            "INSERT OR REPLACE INTO inventory(item, category, qty) VALUES(?, ?, ?)",
+            (name, kat, qty),
+        )
+        await self.bot.db.commit()
+        await self.bot.refresh_panels(interaction.guild, ["lager"])
+        await finish_ephemeral(interaction, f"**{name}** angelegt unter **{kat}** (Bestand: {qty}).")
+
+
+class BossLagerModal(discord.ui.Modal):
+    item = discord.ui.TextInput(label="Was (genau wie im Boss Menü Lager)", required=True, max_length=80)
+    kategorie = discord.ui.TextInput(label="Welche Kategorie", required=True, max_length=40, placeholder="z. B. Waffen")
+    menge = discord.ui.TextInput(label="Wie viel (Zahl)", required=True, max_length=8)
+
+    def __init__(self, bot, direction: int, source_message=None):
+        title = "Reinlegen" if direction > 0 else "Rausnehmen"
+        super().__init__(title=title)
+        self.bot = bot
+        self.direction = direction
+        self.source_message = source_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Modal sofort bestätigen. Render/SQLite/Discord dürfen danach beliebig lange brauchen,
+        # ohne dass Discord "Etwas ist schiefgelaufen" anzeigt.
+        acknowledged = await safe_defer(interaction)
+        if interaction.user.bot:
+            return await safe_feedback(interaction, "Keine Rechte.", acknowledged)
+
+        try:
+            qty = int(str(self.menge.value).strip())
+            if qty <= 0:
+                raise ValueError
+        except ValueError:
+            return await safe_feedback(interaction, "Menge muss eine Zahl größer 0 sein.", acknowledged)
+
+        item_in = str(self.item.value).strip()
+        category_in = str(self.kategorie.value).strip()
+        who = interaction.user.id
+
+        try:
+            # Name + Kategorie case-insensitive suchen; trim verhindert Probleme durch Leerzeichen.
+            cur = await self.bot.db.execute(
+                "SELECT item, category, qty FROM boss_inventory "
+                "WHERE lower(trim(item)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))",
+                (item_in, category_in),
+            )
+            row = await cur.fetchone()
+            if not row:
+                return await safe_feedback(
+                    interaction,
+                    f"`{item_in}` gibt es in der Kategorie **{category_in}** nicht. Prüfe Name/Kategorie oder lege den Gegenstand zuerst an.",
+                    acknowledged,
+                )
+
+            item = row["item"]
+            category = row["category"]
+            old_qty = int(row["qty"])
+            new_qty = old_qty + (qty * self.direction)
+            if new_qty < 0:
+                return await safe_feedback(
+                    interaction, f"Nicht genug Bestand. Aktuell: **{old_qty}**.", acknowledged
+                )
+
+            # Eindeutig über item+category aktualisieren und danach sofort committen.
+            await self.bot.db.execute(
+                "UPDATE boss_inventory SET qty = ? WHERE item = ? AND category = ?",
+                (new_qty, item, category),
+            )
+            await self.bot.db.execute(
+                "INSERT INTO boss_inventory_log(item, delta, who_id, created_at) VALUES(?, ?, ?, ?)",
+                (item, qty * self.direction, who, stamp()),
+            )
+            await self.bot.db.commit()
+
+            # Genau das sichtbare Boss-Lager aktualisieren. Fallback: registriertes Panel refreshen/reposten.
+            await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+
+            verb = "reingelegt" if self.direction > 0 else "rausgenommen"
+            line = f"{interaction.user.mention}: {qty}× {item} {verb}. Neu: {new_qty}"
+            try:
+                await self.bot.log(interaction.guild, line, "Boss Menü Lager")
+            except Exception as log_exc:
+                print(f"[BossLager] Log konnte nicht gesendet werden: {log_exc!r}")
+
+            await safe_feedback(
+                interaction,
+                f"**{qty}× {item}** {verb}. Neuer Bestand: **{new_qty}**.",
+                acknowledged,
+            )
+        except Exception as exc:
+            print(f"[BossLager] Fehler bei Rein/Raus: {type(exc).__name__}: {exc}")
+            await safe_feedback(
+                interaction,
+                "Beim Speichern im Boss-Lager ist ein Fehler aufgetreten. Bitte erneut versuchen.",
+                acknowledged,
+            )
+
+
+class BossLagerNeuModal(discord.ui.Modal, title="Neuen Gegenstand anlegen"):
+    item = discord.ui.TextInput(label="Name", required=True, max_length=80)
+    kategorie = discord.ui.TextInput(
+        label="Kategorie",
+        required=True,
+        max_length=40,
+        placeholder="z. B. Waffen / Westen / Sonstiges",
+    )
+    menge = discord.ui.TextInput(label="Startbestand", required=True, max_length=8, default="0")
+
+    def __init__(self, bot, source_message=None):
+        super().__init__()
+        self.bot = bot
+        self.source_message = source_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
+        if not is_leader(interaction.user):
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
+        try:
+            qty = int(str(self.menge.value).strip())
             if qty < 0:
                 raise ValueError
         except ValueError:
-            return await interaction.response.send_message("Startbestand muss 0 oder größer sein.", ephemeral=True)
+            return await safe_feedback(interaction, "Startbestand muss eine Zahl ab 0 sein.", acknowledged)
+        name = str(self.item.value).strip()
+        kat = str(self.kategorie.value).strip()
+        if not name or not kat:
+            return await safe_feedback(interaction, "Name und Kategorie dürfen nicht leer sein.", acknowledged)
+        try:
+            await self.bot.db.execute(
+                "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES(?, ?)",
+                (kat, stamp()),
+            )
+            cur = await self.bot.db.execute(
+                "SELECT name FROM boss_inventory_categories WHERE lower(trim(name)) = lower(trim(?))", (kat,)
+            )
+            saved_cat = await cur.fetchone()
+            kat = saved_cat["name"] if saved_cat else kat
+            await self.bot.db.execute(
+                "INSERT OR REPLACE INTO boss_inventory(item, category, qty) VALUES(?, ?, ?)",
+                (name, kat, qty),
+            )
+            await self.bot.db.commit()
+            await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+            await safe_feedback(
+                interaction, f"**{name}** angelegt unter **{kat}** (Bestand: **{qty}**).", acknowledged
+            )
+        except Exception as exc:
+            print(f"[BossLager] Fehler beim Gegenstand anlegen: {type(exc).__name__}: {exc}")
+            await safe_feedback(interaction, "Gegenstand konnte nicht gespeichert werden.", acknowledged)
 
-        name = str(self.item).strip()
+
+class BossLagerKategorieModal(discord.ui.Modal, title="Neue Kategorie anlegen"):
+    kategorie = discord.ui.TextInput(
+        label="Kategoriename", required=True, max_length=40, placeholder="z. B. Waffen"
+    )
+
+    def __init__(self, bot, source_message=None):
+        super().__init__()
+        self.bot = bot
+        self.source_message = source_message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
+        if not is_leader(interaction.user):
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
+        kat = str(self.kategorie.value).strip()
+        if not kat:
+            return await safe_feedback(interaction, "Kategorie darf nicht leer sein.", acknowledged)
+        cur = await self.bot.db.execute(
+            "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
+        )
+        if await cur.fetchone():
+            return await safe_feedback(interaction, f"Die Kategorie **{kat}** gibt es bereits.", acknowledged)
         await self.bot.db.execute(
-            "INSERT OR REPLACE INTO inventory(item, category, qty) VALUES(?, ?, ?)",
-            (name, self.category, qty),
+            "INSERT INTO boss_inventory_categories(name, created_at) VALUES(?, ?)", (kat, stamp())
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, [self.panel_key])
-        await interaction.response.send_message(
-            f"**{name}** im **{self.category}** angelegt (Bestand: {qty}).",
-            ephemeral=True,
+        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+        await safe_feedback(
+            interaction, f"Kategorie **{kat}** wurde angelegt und wird jetzt im Boss Menü Lager angezeigt.", acknowledged
         )
 
 
-class BossLagerView(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
+class BossLagerKategorieLoeschenModal(discord.ui.Modal, title="Kategorie löschen"):
+    kategorie = discord.ui.TextInput(
+        label="Welche Kategorie löschen?", required=True, max_length=40, placeholder="z. B. Waffen"
+    )
+
+    def __init__(self, bot, source_message=None):
+        super().__init__()
         self.bot = bot
+        self.source_message = source_message
 
-    @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="bosslager:in")
-    async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "bosslager:in")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, +1, "Boss Lager", "bosslager"))
-
-    @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="bosslager:out")
-    async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "bosslager:out")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, -1, "Boss Lager", "bosslager"))
-
-    @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="bosslager:new")
-    async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "bosslager:new")
-        if __web_gate is False:
-            return
+    async def on_submit(self, interaction: discord.Interaction):
+        acknowledged = await safe_defer(interaction)
         if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(LagerNeuModal(self.bot, "Boss Lager", "bosslager"))
+            return await safe_feedback(interaction, "Nur Leadership / 8er kann das ausführen.", acknowledged)
+        kat = str(self.kategorie.value).strip()
+        if not kat:
+            return await safe_feedback(interaction, "Kategorie darf nicht leer sein.", acknowledged)
 
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="bosslager:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "bosslager:refresh")
-        if __web_gate is False:
-            return
-        await self.bot.repost_panel(interaction.guild, "bosslager")
-        await interaction.response.send_message("Boss Lager aktualisiert.", ephemeral=True)
+        cur = await self.bot.db.execute(
+            "SELECT name FROM boss_inventory_categories WHERE lower(name) = lower(?)", (kat,)
+        )
+        row = await cur.fetchone()
+        if not row:
+            return await safe_feedback(interaction, f"Die Kategorie **{kat}** wurde nicht gefunden.", acknowledged)
 
+        saved_cat = row["name"]
+        # Bestand nicht verlieren: Gegenstände aus der gelöschten Kategorie wandern nach Sonstiges.
+        cur = await self.bot.db.execute(
+            "SELECT COUNT(*) AS c FROM boss_inventory WHERE lower(category) = lower(?)", (saved_cat,)
+        )
+        count = (await cur.fetchone())["c"]
+        if count:
+            await self.bot.db.execute(
+                "INSERT OR IGNORE INTO boss_inventory_categories(name, created_at) VALUES('Sonstiges', ?)",
+                (stamp(),),
+            )
+            await self.bot.db.execute(
+                "UPDATE boss_inventory SET category = 'Sonstiges' WHERE lower(category) = lower(?)",
+                (saved_cat,),
+            )
 
-class NormalesLagerView(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
+        await self.bot.db.execute(
+            "DELETE FROM boss_inventory_categories WHERE lower(name) = lower(?)", (saved_cat,)
+        )
+        await self.bot.db.commit()
+        await refresh_boss_message(self.bot, interaction.guild, self.source_message)
+        extra = f" **{count}** Gegenstand/Gegenstände wurden nach **Sonstiges** verschoben." if count else ""
+        await safe_feedback(interaction, f"Kategorie **{saved_cat}** wurde gelöscht.{extra}", acknowledged)
 
-    @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="normaleslager:in")
-    async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "normaleslager:in")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, +1, "Normales Lager", "normaleslager"))
-
-    @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="normaleslager:out")
-    async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "normaleslager:out")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, -1, "Normales Lager", "normaleslager"))
-
-    @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="normaleslager:new")
-    async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "normaleslager:new")
-        if __web_gate is False:
-            return
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(LagerNeuModal(self.bot, "Normales Lager", "normaleslager"))
-
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="normaleslager:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "normaleslager:refresh")
-        if __web_gate is False:
-            return
-        await self.bot.repost_panel(interaction.guild, "normaleslager")
-        await interaction.response.send_message("Normales Lager aktualisiert.", ephemeral=True)
-
-
-# Legacy-View für bereits vorhandene alte "lager"-Nachrichten:
-# Sie verwaltet ausschließlich das normale Lager.
-class LagerView(discord.ui.View):
-    def __init__(self, bot):
-        super().__init__(timeout=None)
-        self.bot = bot
-
-    @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="lager:in")
-    async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "lager:in")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, +1, "Normales Lager", "lager"))
-
-    @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="lager:out")
-    async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "lager:out")
-        if __web_gate is False:
-            return
-        await interaction.response.send_modal(LagerModal(self.bot, -1, "Normales Lager", "lager"))
-
-    @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="lager:new")
-    async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "lager:new")
-        if __web_gate is False:
-            return
-        if not is_leader(interaction.user):
-            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(LagerNeuModal(self.bot, "Normales Lager", "lager"))
-
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="lager:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, self.bot, "lager:refresh")
-        if __web_gate is False:
-            return
-        await self.bot.repost_panel(interaction.guild, "lager")
-        await interaction.response.send_message("Normales Lager aktualisiert.", ephemeral=True)
 
 class RosterModal(discord.ui.Modal, title="Aufstellung setzen"):
     person_id = discord.ui.TextInput(label="Discord-ID der Person", required=True, max_length=25)
@@ -435,15 +583,18 @@ class RosterModal(discord.ui.Modal, title="Aufstellung setzen"):
         if not is_officer(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         try:
-            uid = int(str(self.person_id).strip())
+            uid = int(str(self.person_id.value).strip())
         except ValueError:
             return await interaction.response.send_message("Ungültige ID.", ephemeral=True)
-        area = str(self.bereich).strip()
+        area = str(self.bereich.value).strip()
         if area not in ROSTER_AREAS:
             return await interaction.response.send_message(
                 "Bereich muss einer von: " + ", ".join(ROSTER_AREAS),
                 ephemeral=True,
             )
+        # Discord-Interactions müssen innerhalb weniger Sekunden bestätigt werden.
+        # Erst bestätigen, dann Datenbank/Panel/Log aktualisieren.
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO roster(user_id, area) VALUES(?, ?) ON CONFLICT(user_id) DO UPDATE SET area=excluded.area",
             (uid, area),
@@ -451,7 +602,7 @@ class RosterModal(discord.ui.Modal, title="Aufstellung setzen"):
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
         await self.bot.log(interaction.guild, f"{interaction.user.mention} hat <@{uid}> nach **{area}** eingeteilt.")
-        await interaction.response.send_message("Aufstellung aktualisiert.", ephemeral=True)
+        await interaction.followup.send("Aufstellung aktualisiert.", ephemeral=True)
 
 
 class EquipModal(discord.ui.Modal, title="Ausrüstung setzen"):
@@ -478,6 +629,7 @@ class EquipModal(discord.ui.Modal, title="Ausrüstung setzen"):
         st = str(self.status).strip().lower()
         if st not in {"vollständig", "unvollständig", "ungeprüft"}:
             return await interaction.response.send_message("Status ungültig.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             """
             INSERT INTO equipment(user_id, status, missing) VALUES(?, ?, ?)
@@ -487,7 +639,7 @@ class EquipModal(discord.ui.Modal, title="Ausrüstung setzen"):
         )
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["ausruestung"])
-        await interaction.response.send_message("Ausrüstung aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Ausrüstung aktualisiert.")
 
 
 class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
@@ -500,6 +652,7 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO vacations(user_id, start, end, reason, status, created_at) VALUES(?, ?, ?, ?, 'aktiv', ?)",
             (interaction.user.id, str(self.start), str(self.ende), str(self.grund), stamp()),
@@ -511,7 +664,7 @@ class UrlaubModal(discord.ui.Modal, title="Urlaub eintragen"):
             f"{interaction.user.mention} Urlaub {self.start} – {self.ende}: {self.grund}",
             "Urlaub",
         )
-        await interaction.response.send_message("Urlaub eingetragen.", ephemeral=True)
+        await finish_ephemeral(interaction, "Urlaub eingetragen.")
 
 
 class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
@@ -529,8 +682,8 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
         zeit = str(self.zeit).strip()
         import database as dbmod
         from panels import ping_ophelia
-        await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
         await interaction.response.defer(ephemeral=True)
+        await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:aufstellung")
         ch = interaction.guild.get_channel(row["channel_id"]) if row else interaction.channel
@@ -543,76 +696,53 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
 
 
 async def set_dienst(bot, member, status):
-    # "offen" = noch keine Entscheidung für heute.
-    # Sobald Anmelden/Abmelden gedrückt wird, den Status sofort speichern
-    # und beide betroffenen Discord-Panels aktualisieren.
+    # Zuerst nur den Status speichern und committen. Ein fehlgeschlagenes Panel-Refresh
+    # darf niemals dazu führen, dass An-/Abmelden als fehlgeschlagen gilt.
     await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (member.id,))
     await bot.db.execute(
         "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, ?, NULL, ?)",
         (member.id, status, stamp()),
     )
     await bot.db.commit()
-    await bot.refresh_panels(member.guild, ["aufstellung", "dienst"])
+    try:
+        updated = await bot.refresh_panels(member.guild, ["aufstellung"])
+        if not updated:
+            await bot.repost_panel(member.guild, "aufstellung")
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+        print(f"Aufstellung-Panel konnte nicht aktualisiert werden: {exc!r}")
 
 
 class DienstView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=None)
         self.bot = bot
-        cfg = getattr(bot, "web_button_config", {}).get("aufstellung", {})
-        style_map = {
-            "primary": discord.ButtonStyle.primary,
-            "secondary": discord.ButtonStyle.secondary,
-            "success": discord.ButtonStyle.success,
-            "danger": discord.ButtonStyle.danger,
-        }
-        key_by_custom = {"auf2:an": "anmelden", "auf2:ab": "abmelden", "auf2:ref": "refresh", "auf2:shift": "shift"}
-        for item in list(self.children):
-            key = key_by_custom.get(getattr(item, "custom_id", None))
-            if not key:
-                continue
-            row = cfg.get(key)
-            if row:
-                item.label = row.get("label") or item.label
-                item.style = style_map.get(row.get("style"), item.style)
-                if not int(row.get("enabled", 1)):
-                    self.remove_item(item)
 
-    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf2:an")
+    @discord.ui.button(label="Anmelden", style=discord.ButtonStyle.success, custom_id="auf10:an")
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "auf2:an")
-        if __web_gate is False:
-            return
+        # Die Interaction wird höchstens einmal bestätigt. Danach gibt es absichtlich
+        # KEINE zweite response/followup-Nachricht. So kann 40060 hier nicht mehr entstehen.
         try:
-            await interaction.response.defer(ephemeral=True)
+            await safe_defer(interaction)
+        except Exception as err:
+            print(f"Aufstellung ACK (anmelden) unerwartet: {err!r}")
+        try:
             await set_dienst(self.bot, interaction.user, "angemeldet")
-            await interaction.followup.send("Angemeldet.", ephemeral=True)
         except Exception as err:
-            try:
-                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
-            except Exception:
-                pass
+            print(f"Aufstellung anmelden Fehler für {interaction.user.id}: {err!r}")
 
-    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf2:ab")
+    @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf10:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "auf2:ab")
-        if __web_gate is False:
-            return
         try:
-            await interaction.response.defer(ephemeral=True)
-            await set_dienst(self.bot, interaction.user, "abgemeldet")
-            await interaction.followup.send("Abgemeldet.", ephemeral=True)
+            await safe_defer(interaction)
         except Exception as err:
-            try:
-                await interaction.followup.send(f"Fehler: {err}", ephemeral=True)
-            except Exception:
-                pass
+            print(f"Aufstellung ACK (abmelden) unerwartet: {err!r}")
+        try:
+            await set_dienst(self.bot, interaction.user, "abgemeldet")
+        except Exception as err:
+            print(f"Aufstellung abmelden Fehler für {interaction.user.id}: {err!r}")
 
-    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf2:ref")
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf10:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "auf2:ref")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message(
                 "Nur Rang 12–8 / NRW kann aktualisieren.", ephemeral=True
@@ -621,11 +751,8 @@ class DienstView(discord.ui.View):
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         await interaction.followup.send("Liste neu.", ephemeral=True)
 
-    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf2:shift")
+    @discord.ui.button(label="Verschieben", style=discord.ButtonStyle.primary, custom_id="auf10:shift")
     async def verschieben(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "auf2:shift")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message(
                 "Nur Rang 12–8 / NRW kann verschieben.", ephemeral=True
@@ -647,19 +774,17 @@ class AbmeldungView(discord.ui.View):
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leitung darf Abmeldungen löschen.", ephemeral=True)
         person = select.values[0]
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute(
             "UPDATE attendance SET status='offen', reason=NULL, updated_at=? WHERE user_id=?",
             (stamp(), person.id),
         )
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["dienst", "aufstellung"])
-        await interaction.response.send_message(f"Abmeldung von {person.mention} gelöscht.", ephemeral=True)
+        await finish_ephemeral(interaction, f"Abmeldung von {person.mention} gelöscht.")
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="abm:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "abm:refresh")
-        if __web_gate is False:
-            return
         await lead_repost(interaction, self.bot, "dienst")
 
 
@@ -670,20 +795,15 @@ class AufstellungView(discord.ui.View):
 
     @discord.ui.button(label="Einteilen", style=discord.ButtonStyle.primary, custom_id="roster:set")
     async def setzen(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "roster:set")
-        if __web_gate is False:
-            return
         if not is_officer(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         await interaction.response.send_modal(RosterModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="roster:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "roster:refresh")
-        if __web_gate is False:
-            return
+        await interaction.response.defer(ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, ["aufstellung"])
-        await interaction.response.send_message("Liste aktualisiert.", ephemeral=True)
+        await interaction.followup.send("Liste aktualisiert.", ephemeral=True)
 
 
 class LagerView(discord.ui.View):
@@ -693,36 +813,65 @@ class LagerView(discord.ui.View):
 
     @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="lager:in")
     async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "lager:in")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(LagerModal(self.bot, +1))
 
     @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="lager:out")
     async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "lager:out")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(LagerModal(self.bot, -1))
 
     @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="lager:new")
     async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "lager:new")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
         await interaction.response.send_modal(LagerNeuModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="lager:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "lager:refresh")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         await self.bot.repost_panel(interaction.guild, "lager")
-        await interaction.response.send_message("Lager aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Lager aktualisiert.")
+
+
+class BossLagerView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(label="Reinlegen", style=discord.ButtonStyle.success, custom_id="bosslager:in", row=0)
+    async def rein(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BossLagerModal(self.bot, +1, interaction.message))
+
+    @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.danger, custom_id="bosslager:out", row=0)
+    async def raus(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(BossLagerModal(self.bot, -1, interaction.message))
+
+    @discord.ui.button(label="Gegenstand anlegen", style=discord.ButtonStyle.primary, custom_id="bosslager:new", row=0)
+    async def neu(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(BossLagerNeuModal(self.bot, interaction.message))
+
+    @discord.ui.button(label="Kategorie anlegen", style=discord.ButtonStyle.secondary, custom_id="bosslager:newcat", row=1)
+    async def neue_kategorie(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(BossLagerKategorieModal(self.bot, interaction.message))
+
+    @discord.ui.button(label="Kategorie löschen", style=discord.ButtonStyle.danger, custom_id="bosslager:delcat", row=1)
+    async def kategorie_loeschen(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        await interaction.response.send_modal(BossLagerKategorieLoeschenModal(self.bot, interaction.message))
+
+    @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="bosslager:refresh", row=1)
+    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not is_leader(interaction.user):
+            return await interaction.response.send_message("Nur Leadership / 8er kann das ausführen.", ephemeral=True)
+        acknowledged = await safe_defer(interaction)
+        await refresh_boss_message(self.bot, interaction.guild, interaction.message)
+        await safe_feedback(interaction, "Boss Menü Lager aktualisiert.", acknowledged)
 
 
 class SanktionView(discord.ui.View):
@@ -743,14 +892,12 @@ class SanktionView(discord.ui.View):
         uid = select.values[0].id
         await self.bot.db.execute("UPDATE sanctions SET active = 0 WHERE user_id = ? AND active = 1", (uid,))
         await self.bot.db.commit()
+        await interaction.response.defer(ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, ["sanktionen"])
-        await interaction.response.send_message(f"{select.values[0].mention} als bezahlt markiert.", ephemeral=True)
+        await finish_ephemeral(interaction, f"{select.values[0].mention} als bezahlt markiert.")
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="san:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "san:refresh")
-        if __web_gate is False:
-            return
         await lead_repost(interaction, self.bot, "sanktionen")
 
 
@@ -761,20 +908,15 @@ class AusruestungView(discord.ui.View):
 
     @discord.ui.button(label="Status setzen", style=discord.ButtonStyle.primary, custom_id="eq:set")
     async def setzen(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "eq:set")
-        if __web_gate is False:
-            return
         if not is_officer(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         await interaction.response.send_modal(EquipModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="eq:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "eq:refresh")
-        if __web_gate is False:
-            return
+        await interaction.response.defer(ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, ["ausruestung"])
-        await interaction.response.send_message("Aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Aktualisiert.")
 
 
 class UrlaubView(discord.ui.View):
@@ -784,16 +926,10 @@ class UrlaubView(discord.ui.View):
 
     @discord.ui.button(label="Urlaub", style=discord.ButtonStyle.primary, custom_id="urlaub:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "urlaub:add")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(UrlaubModal(self.bot))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="urlaub:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "urlaub:refresh")
-        if __web_gate is False:
-            return
         await lead_repost(interaction, self.bot, "urlaub")
 
 
@@ -804,11 +940,9 @@ class RangView(discord.ui.View):
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="rang:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "rang:refresh")
-        if __web_gate is False:
-            return
+        await interaction.response.defer(ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, ["rang", "mitarbeiter"])
-        await interaction.response.send_message("Aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Aktualisiert.")
 
 
 class SimpleRefreshView(discord.ui.View):
@@ -819,11 +953,9 @@ class SimpleRefreshView(discord.ui.View):
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="simple:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "simple:refresh")
-        if __web_gate is False:
-            return
+        await interaction.response.defer(ephemeral=True)
         await self.bot.refresh_panels(interaction.guild, self.panels)
-        await interaction.response.send_message("Aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Aktualisiert.")
 
 
 async def _get_or_create_category(guild: discord.Guild, name: str):
@@ -840,9 +972,6 @@ class TicketView(discord.ui.View):
 
     @discord.ui.button(label="Ticket öffnen", style=discord.ButtonStyle.primary, custom_id="ticket:open")
     async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "ticket:open")
-        if __web_gate is False:
-            return
         await interaction.response.defer(ephemeral=True)
         cat = await _get_or_create_category(interaction.guild, "Tickets")
         safe = "".join(c for c in interaction.user.name.lower() if c.isalnum() or c in "-_")[:20] or "user"
@@ -859,9 +988,6 @@ class TicketView(discord.ui.View):
 
     @discord.ui.button(label="Clip-Kanal", style=discord.ButtonStyle.secondary, custom_id="ticket:clip")
     async def open_clip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "ticket:clip")
-        if __web_gate is False:
-            return
         await interaction.response.defer(ephemeral=True)
         cat = await _get_or_create_category(interaction.guild, "Clips")
         raw = interaction.user.display_name or interaction.user.name
@@ -883,14 +1009,11 @@ class AktivitaetView(discord.ui.View):
 
     @discord.ui.button(label="Check neu starten", style=discord.ButtonStyle.danger, custom_id="akt:reset")
     async def reset(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "akt:reset")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         await self.bot.db.execute("DELETE FROM activity")
         await self.bot.db.commit()
-        await interaction.response.defer(ephemeral=True)
         row = await __import__("database").get_panel(self.bot.db, f"{interaction.guild.id}:aktivitaet")
         if row and interaction.guild.get_channel(row["channel_id"]):
             await self.bot.repost_panel(interaction.guild, "aktivitaet")
@@ -907,9 +1030,6 @@ class StatusView(discord.ui.View):
 
     @discord.ui.button(label="Öffnen", style=discord.ButtonStyle.success, custom_id="club:open")
     async def open_club(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "club:open")
-        if __web_gate is False:
-            return
         if not is_officer(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         import database as dbmod
@@ -920,9 +1040,6 @@ class StatusView(discord.ui.View):
 
     @discord.ui.button(label="Schließen", style=discord.ButtonStyle.danger, custom_id="club:close")
     async def close_club(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "club:close")
-        if __web_gate is False:
-            return
         if not is_officer(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         import database as dbmod
@@ -964,7 +1081,7 @@ class BlacklistModal(discord.ui.Modal, title="Blacklist"):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         await self.bot.db.execute(
             "INSERT INTO blacklist(name, by_id, created_at) VALUES(?, ?, ?)",
-            (str(self.name).strip(), interaction.user.id, stamp()),
+            (str(self.name.value).strip(), interaction.user.id, stamp()),
         )
         await self.bot.db.commit()
         e = discord.Embed(title="Blacklist", color=0xC0392B)
@@ -984,7 +1101,7 @@ class BlacklistDelModal(discord.ui.Modal, title="Von Blacklist nehmen"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
-        await self.bot.db.execute("DELETE FROM blacklist WHERE name = ?", (str(self.name).strip(),))
+        await self.bot.db.execute("DELETE FROM blacklist WHERE name = ?", (str(self.name.value).strip(),))
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["blacklist"])
         await interaction.response.send_message("Von der Blacklist genommen.", ephemeral=True)
@@ -1065,6 +1182,7 @@ class LootModal(discord.ui.Modal, title="Lootdrop abgeben"):
         self.who = who
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         text = f"{self.who.mention} | {self.who.display_name}\n{self.was}"
         await self.bot.db.execute(
             "INSERT INTO lootdrops(body, created_at) VALUES(?, ?)",
@@ -1072,7 +1190,7 @@ class LootModal(discord.ui.Modal, title="Lootdrop abgeben"):
         )
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["lootdrop"])
-        await interaction.response.send_message("Lootdrop eingetragen.", ephemeral=True)
+        await finish_ephemeral(interaction, "Lootdrop eingetragen.")
 
 
 class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
@@ -1086,6 +1204,7 @@ class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         body = f"Wer: {self.wer}\nWie viele: {self.wieviele}\nRoute: {self.route}\nTyp: {self.typ}"
         await self.bot.db.execute(
             "INSERT INTO routechecks(body, created_at) VALUES(?, ?)",
@@ -1093,7 +1212,7 @@ class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
         )
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["routecheck"])
-        await interaction.response.send_message("Kontrolle eingetragen.", ephemeral=True)
+        await finish_ephemeral(interaction, "Kontrolle eingetragen.")
 
 
 class BlacklistView(discord.ui.View):
@@ -1103,18 +1222,12 @@ class BlacklistView(discord.ui.View):
 
     @discord.ui.button(label="Blacklist", style=discord.ButtonStyle.danger, custom_id="bl:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "bl:add")
-        if __web_gate is False:
-            return
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         await interaction.response.send_modal(BlacklistModal(self.bot))
 
     @discord.ui.button(label="Rausnehmen", style=discord.ButtonStyle.secondary, custom_id="bl:del")
     async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "bl:del")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Keine Rechte.", ephemeral=True)
         await interaction.response.send_modal(BlacklistDelModal(self.bot))
@@ -1141,9 +1254,6 @@ class RoleConfirmView(discord.ui.View):
 
     @discord.ui.button(label="Bestätigen", style=discord.ButtonStyle.success, custom_id="role:reqok")
     async def ok(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "role:reqok")
-        if __web_gate is False:
-            return
         if not is_high(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         if not interaction.message.embeds:
@@ -1206,9 +1316,6 @@ class RolleAnfrageView(discord.ui.View):
 
     @discord.ui.button(label="Rolle anfragen", style=discord.ButtonStyle.primary, custom_id="role:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "role:ask")
-        if __web_gate is False:
-            return
         import database as dbmod
         ziel = None
         row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:rollenbestaetigen")
@@ -1257,10 +1364,8 @@ class ClipAntragView(discord.ui.View):
 
     @discord.ui.button(label="Kill-Clip beantragen", style=discord.ButtonStyle.primary, custom_id="clip:ask")
     async def ask(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "clip:ask")
-        if __web_gate is False:
-            return
         from rules_data import CLIP_RULES
+        acknowledged = await safe_defer(interaction)
         cur = await self.bot.db.execute(
             "SELECT channel_id FROM clip_channels WHERE user_id = ?",
             (interaction.user.id,),
@@ -1269,10 +1374,8 @@ class ClipAntragView(discord.ui.View):
         if row and not is_high(interaction.user):
             ch = interaction.guild.get_channel(row["channel_id"])
             if ch:
-                return await interaction.response.send_message(
-                    f"Du hast schon einen Clip-Kanal: {ch.mention}", ephemeral=True
-                )
-            return await interaction.response.send_message("Nur 1 Clip-Kanal. Leadership darf mehrere.", ephemeral=True)
+                return await safe_feedback(interaction, f"Du hast schon einen Clip-Kanal: {ch.mention}", acknowledged)
+            return await safe_feedback(interaction, "Nur 1 Clip-Kanal. Leadership darf mehrere.", acknowledged)
         cat = None
         for c in interaction.guild.categories:
             if c.name.lower() in {"kill-logs", "kill logs", "killlogs"}:
@@ -1289,7 +1392,7 @@ class ClipAntragView(discord.ui.View):
         )
         await self.bot.db.commit()
         await channel.send(f"{interaction.user.mention}\n{CLIP_RULES}")
-        await interaction.response.send_message(f"Kanal: {channel.mention}", ephemeral=True)
+        await safe_feedback(interaction, f"Kanal: {channel.mention}", acknowledged)
 
 
 class LootView(discord.ui.View):
@@ -1310,9 +1413,6 @@ class RouteCheckView(discord.ui.View):
 
     @discord.ui.button(label="Kontrolle eintragen", style=discord.ButtonStyle.primary, custom_id="rc:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "rc:add")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(RouteCheckModal(self.bot))
 
 
@@ -1328,6 +1428,7 @@ class AbgabeModal(discord.ui.Modal, title="Abgabe"):
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
         text = f"{self.who.mention} | {self.who.display_name}\n{self.was} × {self.wieviel}"
         await self.bot.db.execute(
             "INSERT INTO abgaben(body, created_at) VALUES(?, ?)",
@@ -1338,7 +1439,7 @@ class AbgabeModal(discord.ui.Modal, title="Abgabe"):
         e.description = f"**Wer:** {self.who.mention}\n**Was:** {self.was}\n**Wie viel:** {self.wieviel}"
         e.set_footer(text=stamp())
         await interaction.channel.send(embed=e)
-        await interaction.response.send_message("Abgabe gepostet.", ephemeral=True)
+        await finish_ephemeral(interaction, "Abgabe gepostet.")
 
 
 class AbgabeView(discord.ui.View):
@@ -1364,9 +1465,10 @@ class KasseModal(discord.ui.Modal, title="Fraktionskasse"):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         import database as dbmod
+        await interaction.response.defer(ephemeral=True)
         await dbmod.set_setting(self.bot.db, "frak_kasse", str(self.amount).strip())
         await self.bot.refresh_panels(interaction.guild, ["kasse"])
-        await interaction.response.send_message("Kasse aktualisiert.", ephemeral=True)
+        await finish_ephemeral(interaction, "Kasse aktualisiert.")
 
 
 class KasseView(discord.ui.View):
@@ -1376,9 +1478,6 @@ class KasseView(discord.ui.View):
 
     @discord.ui.button(label="Bestand setzen", style=discord.ButtonStyle.primary, custom_id="kasse:set")
     async def set_amt(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "kasse:set")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
         await interaction.response.send_modal(KasseModal(self.bot))
@@ -1389,39 +1488,122 @@ class RouteModal(discord.ui.Modal, title="Route eintragen"):
     menge = discord.ui.TextInput(label="Menge / Abgabe", required=True, max_length=40)
     bis = discord.ui.TextInput(label="Abgeben bis wann", required=True, max_length=40)
 
-    def __init__(self, bot):
+    def __init__(self, bot, panel_message=None):
         super().__init__()
         self.bot = bot
+        self.panel_message = panel_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
+
+        await interaction.response.defer(ephemeral=True)
+        route_name = str(self.name.value).strip()
+        menge = str(self.menge.value).strip()
+        bis = str(self.bis.value).strip()
+
+        # Route speichern. Die sichtbare Route selbst kommt NICHT mehr ins Panel,
+        # sondern wird nach Bestätigung als normale Nachricht in den Kanal gepostet.
         try:
-            await self.bot.db.execute(
+            cur = await self.bot.db.execute(
                 "INSERT INTO routes(name, amount) VALUES(?, ?)",
-                (str(self.name).strip(), f"{self.menge} | bis {self.bis}"),
+                (route_name, f"{menge} | bis {bis}"),
             )
         except Exception:
-            await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (f"{self.name} — {self.menge}",))
+            cur = await self.bot.db.execute("INSERT INTO routes(name) VALUES(?)", (route_name,))
+        route_id = cur.lastrowid
         await self.bot.db.commit()
+
+        # Route als eigene Embed-Nachricht posten – im gleichen Stil wie eine Sanktion.
+        # Das Steuerungs-Panel selbst enthält weiterhin nur Überschrift + Buttons.
+        route_embed = discord.Embed(title="Unsere Route", color=0x2B2D31)
+        route_embed.description = (
+            f"**Route:** {route_name}\n"
+            f"**Menge / Abgabe:** {menge}\n"
+            f"**Abgeben bis:** {bis}"
+        )
+        route_embed.set_footer(text=f"RID:{route_id}")
+        # Falls das aktuelle Panel noch aus einer älteren Version als Embed/Tabelle
+        # existiert, sofort auf eine reine Button-Nachricht umstellen.
+        if self.panel_message is not None:
+            try:
+                await self.panel_message.edit(
+                    content="# Unsere Route",
+                    embed=None,
+                    view=RouteView(self.bot),
+                )
+            except discord.HTTPException:
+                pass
+
+        posted = await interaction.channel.send(embed=route_embed)
+
+        # Nachrichten-ID merken, damit 'Löschen' auch die gepostete Route entfernt.
+        try:
+            await self.bot.db.execute(
+                "UPDATE routes SET message_id = ?, channel_id = ? WHERE id = ?",
+                (posted.id, posted.channel.id, route_id),
+            )
+            await self.bot.db.commit()
+        except Exception:
+            pass
+
+        # Das Steuerungs-Panel bleibt unverändert; dort werden keine Routendaten angezeigt.
         await self.bot.refresh_panels(interaction.guild, ["routen"])
-        await interaction.response.send_message(f"Route **{self.name}** ({self.menge}) steht in der Liste.", ephemeral=True)
+        await interaction.followup.send(
+            f"Route **{route_name}** wurde als Nachricht gepostet.",
+            ephemeral=True,
+        )
 
 
 class RouteDelModal(discord.ui.Modal, title="Route löschen"):
-    name = discord.ui.TextInput(label="Route genau wie in der Liste", required=True, max_length=80)
+    name = discord.ui.TextInput(label="Route genau wie gepostet", required=True, max_length=80)
 
-    def __init__(self, bot):
+    def __init__(self, bot, panel_message=None):
         super().__init__()
         self.bot = bot
+        self.panel_message = panel_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await self.bot.db.execute("DELETE FROM routes WHERE name = ?", (str(self.name).strip(),))
+
+        await interaction.response.defer(ephemeral=True)
+        route_name = str(self.name.value).strip()
+
+        try:
+            cur = await self.bot.db.execute(
+                "SELECT id, message_id, channel_id FROM routes WHERE name = ? ORDER BY id DESC",
+                (route_name,),
+            )
+            rows = await cur.fetchall()
+        except Exception:
+            cur = await self.bot.db.execute(
+                "SELECT id FROM routes WHERE name = ? ORDER BY id DESC",
+                (route_name,),
+            )
+            rows = await cur.fetchall()
+
+        # Gepostete Routennachrichten entfernen, sofern ihre IDs bekannt sind.
+        for row in rows:
+            try:
+                message_id = row["message_id"]
+                channel_id = row["channel_id"]
+            except Exception:
+                message_id = None
+                channel_id = None
+            if message_id:
+                ch = interaction.guild.get_channel(channel_id) if channel_id else interaction.channel
+                if ch is not None:
+                    try:
+                        msg = await ch.fetch_message(message_id)
+                        await msg.delete()
+                    except discord.HTTPException:
+                        pass
+
+        await self.bot.db.execute("DELETE FROM routes WHERE name = ?", (route_name,))
         await self.bot.db.commit()
         await self.bot.refresh_panels(interaction.guild, ["routen"])
-        await interaction.response.send_message("Route gelöscht.", ephemeral=True)
+        await interaction.followup.send("Route gelöscht.", ephemeral=True)
 
 
 class EinkaufModal(discord.ui.Modal, title="Eingekauft"):
@@ -1446,7 +1628,7 @@ class EinkaufModal(discord.ui.Modal, title="Eingekauft"):
         from panels import ping_ophelia
         await interaction.channel.send(content=ping_ophelia(interaction.guild), embed=e)
         await self.bot.refresh_panels(interaction.guild, ["einkauf"])
-        await interaction.response.send_message("Eingekauft gepostet.", ephemeral=True)
+        await finish_ephemeral(interaction, "Eingekauft gepostet.")
 
 
 class EinkaufView(discord.ui.View):
@@ -1456,9 +1638,6 @@ class EinkaufView(discord.ui.View):
 
     @discord.ui.button(label="Eingekauft eintragen", style=discord.ButtonStyle.primary, custom_id="ek:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "ek:add")
-        if __web_gate is False:
-            return
         if not can_route(interaction.user):
             return await interaction.response.send_message("Nur Leadership oder Rang 9.", ephemeral=True)
         await interaction.response.send_modal(EinkaufModal(self.bot))
@@ -1471,28 +1650,19 @@ class RouteView(discord.ui.View):
 
     @discord.ui.button(label="Route eintragen", style=discord.ButtonStyle.primary, custom_id="route:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "route:add")
-        if __web_gate is False:
-            return
         if not can_route(interaction.user):
             return await interaction.response.send_message("Nur Leadership oder Rang 9.", ephemeral=True)
-        await interaction.response.send_modal(RouteModal(self.bot))
+        await interaction.response.send_modal(RouteModal(self.bot, interaction.message))
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="route:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "route:ref")
-        if __web_gate is False:
-            return
         await lead_repost(interaction, self.bot, "routen")
 
     @discord.ui.button(label="Löschen", style=discord.ButtonStyle.danger, custom_id="route:del")
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "route:del")
-        if __web_gate is False:
-            return
         if not is_leader(interaction.user):
             return await interaction.response.send_message("Nur Leadership kann das ausführen.", ephemeral=True)
-        await interaction.response.send_modal(RouteDelModal(self.bot))
+        await interaction.response.send_modal(RouteDelModal(self.bot, interaction.message))
 
 
 class ArbeiterModal(discord.ui.Modal, title="Arbeiter eintragen"):
@@ -1545,8 +1715,9 @@ class ArbeiterDelModal(discord.ui.Modal, title="Arbeiter rausnehmen"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         await interaction.channel.send(f"**Arbeiter raus:** {self.name} (von {interaction.user.mention})")
-        await interaction.response.send_message("Rausgenommen (Nachricht gepostet).", ephemeral=True)
+        await finish_ephemeral(interaction, "Rausgenommen (Nachricht gepostet).")
 
 
 class ArbeiterView(discord.ui.View):
@@ -1556,14 +1727,8 @@ class ArbeiterView(discord.ui.View):
 
     @discord.ui.button(label="Arbeiter eintragen", style=discord.ButtonStyle.primary, custom_id="arb:add")
     async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "arb:add")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(ArbeiterModal(self.bot))
 
     @discord.ui.button(label="Arbeiter rausnehmen", style=discord.ButtonStyle.danger, custom_id="arb:del")
     async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        __web_gate = await configured_button_role_gate(interaction, getattr(self, "bot", interaction.client), "arb:del")
-        if __web_gate is False:
-            return
         await interaction.response.send_modal(ArbeiterDelModal(self.bot))
