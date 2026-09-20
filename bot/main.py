@@ -415,19 +415,38 @@ async def daily_clock():
             await database.set_setting(bot.db, "last_aktivitaet_date", day)
     if now.hour == 18 and now.minute == 0:
         from panels import staff_members
+
+        def _as_uid(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
+
+        def _dienst_status(raw):
+            text = str(raw or "").strip().lower()
+            if text in {"angemeldet", "anwesend", "an", "da", "anmeldung"}:
+                return "angemeldet"
+            if text in {"abgemeldet", "abwesend", "ab", "abmeldung"}:
+                return "abgemeldet"
+            return "offen"
+
         for g in bot.guilds:
             cur = await bot.db.execute("SELECT user_id, status FROM attendance")
-            rows = {r["user_id"]: r["status"] for r in await cur.fetchall()}
+            rows = {}
+            for r in await cur.fetchall():
+                uid = _as_uid(r["user_id"])
+                if uid is not None:
+                    rows[uid] = _dienst_status(r["status"])
             cur = await bot.db.execute(
                 "SELECT user_id FROM vacations WHERE status IN ('genehmigt', 'aktiv')"
             )
-            vac = {r["user_id"] for r in await cur.fetchall()}
+            vac = {uid for uid in (_as_uid(r["user_id"]) for r in await cur.fetchall()) if uid}
             hit = []
             for m in staff_members(g):
-                if m.id in vac:
+                if getattr(m, "bot", False) or m.id in vac:
                     continue
-                st = rows.get(m.id, "offen")
-                if st in {"angemeldet", "abgemeldet"}:
+                # Nur wer in der Aufstellung unter OFFEN steht.
+                if rows.get(m.id, "offen") != "offen":
                     continue
                 hit.append(m)
                 await bot.db.execute(
