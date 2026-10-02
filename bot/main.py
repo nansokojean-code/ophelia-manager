@@ -1,4 +1,4 @@
-BUILD_ID = "2026-09-09-aufstellung-v10-single-ack"
+BUILD_ID = "2026-10-02-aufstellung-zeit-routecheck"
 import asyncio
 import os
 import sys
@@ -384,20 +384,167 @@ async def on_ready():
         daily_clock.start()
 
 
+def _berlin_now():
+    if TZ is not None:
+        return datetime.now(TZ)
+    return datetime.now()
+
+
+def _parse_hhmm(raw, default=(18, 0)):
+    text = str(raw or "").strip().lower().replace("uhr", "").replace(".", ":")
+    parts = [x for x in text.replace(" ", "").split(":") if x != ""]
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except (ValueError, IndexError):
+        pass
+    return default
+
+
+async def _roll_aufstellung(guild, reason):
+    """Neue Aufstellung in den Kanal schicken und Anmeldungen des Tages leeren."""
+    await bot.db.execute("DELETE FROM attendance")
+    await bot.db.commit()
+    await database.set_setting(bot.db, f"aufstellung_time:{guild.id}", "18:00")
+    msg = None
+    try:
+        msg = await bot.repost_panel(guild, "aufstellung")
+    except Exception as exc:
+        print(f"Aufstellung repost fehlgeschlagen {guild.id}: {exc!r}")
+    if msg is None:
+        row = await database.get_panel(bot.db, f"{guild.id}:aufstellung")
+        ch = guild.get_channel(row["channel_id"]) if row else None
+        if ch is None:
+            ch = discord.utils.find(lambda c: "aufstellung" in c.name.lower(), guild.text_channels)
+        if ch is not None:
+            try:
+                msg = await bot.post_panel(ch, "aufstellung")
+            except Exception as exc:
+                print(f"Aufstellung post fehlgeschlagen {guild.id}: {exc!r}")
+    if msg is not None:
+        try:
+            await msg.channel.send(
+                f"# Aufstellung\n{panels.ping_ophelia(guild)}\n"
+                "Neue Aufstellung ist da. Bitte an- oder abmelden."
+            )
+        except discord.HTTPException:
+            pass
+    await bot.log(guild, reason, "Aufstellung")
+    return msg
+
+
+async def _sanction_offen(guild, now, deadline_label):
+    from panels import staff_members
+
+    def _as_uid(value):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _dienst_status(raw):
+        text = str(raw or "").strip().lower()
+        if text in {"angemeldet", "anwesend", "an", "da", "anmeldung"}:
+            return "angemeldet"
+        if text in {"abgemeldet", "abwesend", "ab", "abmeldung"}:
+            return "abgemeldet"
+        return "offen"
+
+    cur = await bot.db.execute("SELECT user_id, status FROM attendance")
+    rows = {}
+    for r in await cur.fetchall():
+        uid = _as_uid(r["user_id"])
+        if uid is not None:
+            rows[uid] = _dienst_status(r["status"])
+    cur = await bot.db.execute(
+        "SELECT user_id FROM vacations WHERE status IN ('genehmigt', 'aktiv')"
+    )
+    vac = {uid for uid in (_as_uid(r["user_id"]) for r in await cur.fetchall()) if uid}
+    hit = []
+    for m in staff_members(guild):
+        if getattr(m, "bot", False) or m.id in vac:
+            continue
+        if rows.get(m.id, "offen") != "offen":
+            continue
+        hit.append(m)
+        await bot.db.execute(
+            """
+            INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
+            VALUES(?, ?, ?, ?, ?, 1, ?)
+            """,
+            (
+                m.id,
+                f"Nicht an-/abgemeldet (offen nach {deadline_label})",
+                "15k",
+                "bis morgen 19 Uhr",
+                bot.user.id,
+                now.strftime("%d.%m.%Y %H:%M"),
+            ),
+        )
+    await bot.db.commit()
+    if not hit:
+        return
+    await bot.refresh_panels(guild, ["sanktionen", "aufstellung", "dienst"])
+    await bot.log(
+        guild,
+        f"{deadline_label} Offen → 15k Sanktion: " + ", ".join(m.mention for m in hit[:30]),
+        "Sanktionen",
+    )
+    prow = await database.get_panel(bot.db, f"{guild.id}:sanktionen")
+    sch = (
+        guild.get_channel(prow["channel_id"])
+        if prow
+        else discord.utils.find(
+            lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(),
+            guild.text_channels,
+        )
+    )
+    if not sch:
+        return
+    for m in hit:
+        cur = await bot.db.execute(
+            "SELECT id FROM sanctions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
+            (m.id,),
+        )
+        row = await cur.fetchone()
+        sid = row["id"] if row else "?"
+        e = discord.Embed(title="Sanktion", color=0xC0392B)
+        e.description = (
+            f"**Wer:** {m.mention}\n"
+            f"**Was:** Nicht an-/abgemeldet (offen nach {deadline_label})\n"
+            f"**Wie viel:** 15k\n"
+            f"**Bis:** bis morgen 19 Uhr"
+        )
+        e.set_footer(text=f"SID:{sid}")
+        try:
+            await sch.send(embed=e, view=views.SanktionPayView())
+        except discord.HTTPException:
+            pass
+
+
 @tasks.loop(minutes=1)
 async def daily_clock():
-    now = datetime.now(TZ) if TZ else datetime.now()
+    try:
+        await _clock_tick()
+    except Exception as exc:
+        print(f"daily_clock Fehler: {exc!r}")
+
+
+async def _clock_tick():
+    now = _berlin_now()
     mark = now.strftime("%Y-%m-%d-%H-%M")
     last = await database.get_setting(bot.db, "clock_tick")
     if last == mark:
         return
     await database.set_setting(bot.db, "clock_tick", mark)
+    day = now.strftime("%Y-%m-%d")
     if now.hour == 0 and now.minute == 0:
         for g in bot.guilds:
-            await bot.db.execute("DELETE FROM attendance")
-            await bot.db.commit()
-            await bot.repost_panel(g, "aufstellung")
-            await bot.log(g, "00:00 neue Aufstellung.", "Aufstellung")
+            await _roll_aufstellung(g, "00:00 neue Aufstellung.")
+            await database.set_setting(bot.db, f"aufstellung_posted:{g.id}", day)
+            await database.set_setting(bot.db, f"sanction_done:{g.id}", "")
         last_akt = await database.get_setting(bot.db, "last_aktivitaet_date", "")
         day = now.strftime("%Y-%m-%d")
         if last_akt:
@@ -413,90 +560,25 @@ async def daily_clock():
             for g in bot.guilds:
                 await bot.repost_panel(g, "aktivitaet")
             await database.set_setting(bot.db, "last_aktivitaet_date", day)
-    if now.hour == 18 and now.minute == 0:
-        from panels import staff_members
-
-        def _as_uid(value):
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return None
-
-        def _dienst_status(raw):
-            text = str(raw or "").strip().lower()
-            if text in {"angemeldet", "anwesend", "an", "da", "anmeldung"}:
-                return "angemeldet"
-            if text in {"abgemeldet", "abwesend", "ab", "abmeldung"}:
-                return "abgemeldet"
-            return "offen"
-
-        for g in bot.guilds:
-            cur = await bot.db.execute("SELECT user_id, status FROM attendance")
-            rows = {}
-            for r in await cur.fetchall():
-                uid = _as_uid(r["user_id"])
-                if uid is not None:
-                    rows[uid] = _dienst_status(r["status"])
-            cur = await bot.db.execute(
-                "SELECT user_id FROM vacations WHERE status IN ('genehmigt', 'aktiv')"
-            )
-            vac = {uid for uid in (_as_uid(r["user_id"]) for r in await cur.fetchall()) if uid}
-            hit = []
-            for m in staff_members(g):
-                if getattr(m, "bot", False) or m.id in vac:
-                    continue
-                # Nur wer in der Aufstellung unter OFFEN steht.
-                if rows.get(m.id, "offen") != "offen":
-                    continue
-                hit.append(m)
-                await bot.db.execute(
-                    """
-                    INSERT INTO sanctions(user_id, kind, reason, until_text, by_id, active, created_at)
-                    VALUES(?, ?, ?, ?, ?, 1, ?)
-                    """,
-                    (
-                        m.id,
-                        "Nicht an-/abgemeldet (offen nach 18 Uhr)",
-                        "15k",
-                        "bis morgen 19 Uhr",
-                        bot.user.id,
-                        now.strftime("%d.%m.%Y %H:%M"),
-                    ),
-                )
-            await bot.db.commit()
-            if hit:
-                await bot.refresh_panels(g, ["sanktionen", "aufstellung", "dienst"])
-                await bot.log(
-                    g,
-                    "18:00 Offen → 15k Sanktion: " + ", ".join(m.mention for m in hit[:30]),
-                    "Sanktionen",
-                )
-                prow = await database.get_panel(bot.db, f"{g.id}:sanktionen")
-                sch = (
-                    g.get_channel(prow["channel_id"])
-                    if prow
-                    else discord.utils.find(
-                        lambda c: "sanktion" in c.name.lower() and "katalog" not in c.name.lower(),
-                        g.text_channels,
-                    )
-                )
-                if sch:
-                    for m in hit:
-                        cur = await bot.db.execute(
-                            "SELECT id FROM sanctions WHERE user_id = ? AND active = 1 ORDER BY id DESC LIMIT 1",
-                            (m.id,),
-                        )
-                        row = await cur.fetchone()
-                        sid = row["id"] if row else "?"
-                        e = discord.Embed(title="Sanktion", color=0xC0392B)
-                        e.description = (
-                            f"**Wer:** {m.mention}\n"
-                            f"**Was:** Nicht an-/abgemeldet (offen nach 18 Uhr)\n"
-                            f"**Wie viel:** 15k\n"
-                            f"**Bis:** bis morgen 19 Uhr"
-                        )
-                        e.set_footer(text=f"SID:{sid}")
-                        await sch.send(embed=e, view=views.SanktionPayView())
+    for g in bot.guilds:
+        posted = await database.get_setting(bot.db, f"aufstellung_posted:{g.id}", "")
+        # Falls der Hoster um 00:00 geschlafen hat: einmal nachholen, aber nicht
+        # Anmeldungen löschen, die an diesem Tag schon existieren.
+        if posted != day and not (now.hour == 0 and now.minute == 0):
+            cur = await bot.db.execute("SELECT COUNT(*) AS c FROM attendance")
+            count = (await cur.fetchone())["c"]
+            if count == 0 and now.hour < 12:
+                await _roll_aufstellung(g, "Aufstellung nachgeholt, 00:00 wurde verpasst.")
+            await database.set_setting(bot.db, f"aufstellung_posted:{g.id}", day)
+        raw_time = await database.get_setting(bot.db, f"aufstellung_time:{g.id}", "18:00")
+        hour, minute = _parse_hhmm(raw_time)
+        done = await database.get_setting(bot.db, f"sanction_done:{g.id}", "")
+        if done == day:
+            continue
+        if (now.hour, now.minute) >= (hour, minute):
+            label = f"{hour:02d}:{minute:02d}"
+            await _sanction_offen(g, now, label)
+            await database.set_setting(bot.db, f"sanction_done:{g.id}", day)
 
 
 @daily_clock.before_loop

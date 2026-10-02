@@ -196,7 +196,7 @@ async def embed_dienststatus(guild, db, title="Aufstellung", ping=False):
             block("Offen", "offen"),
         ]
     )
-    e.description = f"{ping_ophelia(guild)}\n\n{body}" if ping else body
+    e.description = (f"{ping_ophelia(guild)}\n\n{body}" if ping else body)[:4000]
     e.set_footer(text=now_footer("Buttons unten"))
     return e
 
@@ -561,10 +561,11 @@ async def embed_einkauf(db):
 
 
 async def embed_routecheck(db):
-    cur = await db.execute("SELECT body, created_at FROM routechecks ORDER BY id DESC LIMIT 15")
-    rows = await cur.fetchall()
     e = discord.Embed(title="Routenkontrolle", color=0x2B2D31)
-    e.description = "\n".join(f"**{r['created_at']}**\n{r['body']}" for r in rows) or "_keine Kontrolle_"
+    e.description = (
+        "Hier wird **nichts automatisch** abgeschickt.\n"
+        "Nur wenn jemand **Kontrolle eintragen** ausfüllt, kommt eine Nachricht in den Kanal."
+    )
     e.set_footer(text=now_footer())
     return e
 

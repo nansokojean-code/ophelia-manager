@@ -679,11 +679,13 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
             return await interaction.response.send_message(
                 "Nur Rang 12–8 / NRW kann die Aufstellung verschieben.", ephemeral=True
             )
-        zeit = str(self.zeit).strip()
+        zeit = str(getattr(self.zeit, "value", self.zeit) or "").strip()
         import database as dbmod
         from panels import ping_ophelia
         await interaction.response.defer(ephemeral=True)
         await dbmod.set_setting(self.bot.db, f"aufstellung_time:{interaction.guild.id}", zeit)
+        # Sanktion gilt ab der neuen Uhrzeit, nicht mehr fest um 18:00.
+        await dbmod.set_setting(self.bot.db, f"sanction_done:{interaction.guild.id}", "")
         await self.bot.repost_panel(interaction.guild, "aufstellung")
         row = await dbmod.get_panel(self.bot.db, f"{interaction.guild.id}:aufstellung")
         ch = interaction.guild.get_channel(row["channel_id"]) if row else interaction.channel
@@ -695,21 +697,31 @@ class AufstellungZeitModal(discord.ui.Modal, title="Aufstellung verschieben"):
         await interaction.followup.send(f"Verschoben auf {zeit} Uhr.", ephemeral=True)
 
 
-async def set_dienst(bot, member, status):
-    # Zuerst nur den Status speichern und committen. Ein fehlgeschlagenes Panel-Refresh
-    # darf niemals dazu führen, dass An-/Abmelden als fehlgeschlagen gilt.
+async def set_dienst(bot, member, status, message=None):
+    # Zuerst speichern. Ein fehlgeschlagenes Panel darf An-/Abmelden nicht kaputt machen.
     await bot.db.execute("DELETE FROM attendance WHERE user_id = ?", (member.id,))
     await bot.db.execute(
         "INSERT INTO attendance(user_id, status, reason, updated_at) VALUES(?, ?, NULL, ?)",
         (member.id, status, stamp()),
     )
     await bot.db.commit()
-    try:
-        updated = await bot.refresh_panels(member.guild, ["aufstellung"])
-        if not updated:
-            await bot.repost_panel(member.guild, "aufstellung")
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-        print(f"Aufstellung-Panel konnte nicht aktualisiert werden: {exc!r}")
+    from panels import embed_aufstellung
+    embed = await embed_aufstellung(member.guild, bot.db)
+    view = DienstView(bot)
+    edited = False
+    if message is not None:
+        try:
+            await message.edit(content=f"# {embed.title or 'Aufstellung'}", embed=embed, view=view)
+            edited = True
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+            print(f"Aufstellung-Nachricht nicht editierbar: {exc!r}")
+    if not edited:
+        try:
+            updated = await bot.refresh_panels(member.guild, ["aufstellung"])
+            if not updated:
+                await bot.repost_panel(member.guild, "aufstellung")
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+            print(f"Aufstellung-Panel konnte nicht aktualisiert werden: {exc!r}")
 
 
 class DienstView(discord.ui.View):
@@ -721,25 +733,31 @@ class DienstView(discord.ui.View):
     async def anmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Die Interaction wird höchstens einmal bestätigt. Danach gibt es absichtlich
         # KEINE zweite response/followup-Nachricht. So kann 40060 hier nicht mehr entstehen.
+        acknowledged = False
         try:
-            await safe_defer(interaction)
+            acknowledged = await safe_defer(interaction)
         except Exception as err:
             print(f"Aufstellung ACK (anmelden) unerwartet: {err!r}")
         try:
-            await set_dienst(self.bot, interaction.user, "angemeldet")
+            await set_dienst(self.bot, interaction.user, "angemeldet", interaction.message)
+            await safe_feedback(interaction, "Angemeldet.", acknowledged)
         except Exception as err:
             print(f"Aufstellung anmelden Fehler für {interaction.user.id}: {err!r}")
+            await safe_feedback(interaction, "Anmelden hat nicht geklappt. Bitte nochmal.", acknowledged)
 
     @discord.ui.button(label="Abmelden", style=discord.ButtonStyle.danger, custom_id="auf10:ab")
     async def abmelden(self, interaction: discord.Interaction, button: discord.ui.Button):
+        acknowledged = False
         try:
-            await safe_defer(interaction)
+            acknowledged = await safe_defer(interaction)
         except Exception as err:
             print(f"Aufstellung ACK (abmelden) unerwartet: {err!r}")
         try:
-            await set_dienst(self.bot, interaction.user, "abgemeldet")
+            await set_dienst(self.bot, interaction.user, "abgemeldet", interaction.message)
+            await safe_feedback(interaction, "Abgemeldet.", acknowledged)
         except Exception as err:
             print(f"Aufstellung abmelden Fehler für {interaction.user.id}: {err!r}")
+            await safe_feedback(interaction, "Abmelden hat nicht geklappt. Bitte nochmal.", acknowledged)
 
     @discord.ui.button(label="Aktualisieren", style=discord.ButtonStyle.secondary, custom_id="auf10:ref")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -1204,15 +1222,27 @@ class RouteCheckModal(discord.ui.Modal, title="Routenkontrolle"):
         self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
+        wer = str(getattr(self.wer, "value", self.wer) or "").strip()
+        wieviele = str(getattr(self.wieviele, "value", self.wieviele) or "").strip()
+        route = str(getattr(self.route, "value", self.route) or "").strip()
+        typ = str(getattr(self.typ, "value", self.typ) or "").strip()
+        if not (wer and wieviele and route and typ):
+            return await interaction.response.send_message(
+                "Nichts abgeschickt. Alle Felder müssen ausgefüllt sein.",
+                ephemeral=True,
+            )
         await interaction.response.defer(ephemeral=True)
-        body = f"Wer: {self.wer}\nWie viele: {self.wieviele}\nRoute: {self.route}\nTyp: {self.typ}"
+        body = f"Wer: {wer}\nWie viele: {wieviele}\nRoute: {route}\nTyp: {typ}"
         await self.bot.db.execute(
             "INSERT INTO routechecks(body, created_at) VALUES(?, ?)",
             (body, stamp()),
         )
         await self.bot.db.commit()
-        await self.bot.refresh_panels(interaction.guild, ["routecheck"])
-        await finish_ephemeral(interaction, "Kontrolle eingetragen.")
+        e = discord.Embed(title="Routenkontrolle", color=0x2B2D31)
+        e.description = body
+        e.set_footer(text=stamp())
+        await interaction.channel.send(embed=e)
+        await finish_ephemeral(interaction, "Kontrolle abgeschickt.")
 
 
 class BlacklistView(discord.ui.View):
